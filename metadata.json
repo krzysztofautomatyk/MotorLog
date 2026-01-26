@@ -1,0 +1,5 @@
+{
+  "name": "Industrial Motor Analytics",
+  "description": "A high-performance dashboard for visualizing industrial motor telemetry, zone status, and predictive maintenance metrics.",
+  "requestFramePermissions": []
+}
