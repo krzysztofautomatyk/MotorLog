@@ -11,7 +11,7 @@ export const Layout: React.FC<LayoutProps> = ({ children, breadcrumbs }) => {
     <div className="min-h-screen bg-slate-50 text-slate-900 flex flex-col">
       {/* Header */}
       <header className="bg-white border-b border-slate-200 sticky top-0 z-50 shadow-sm">
-        <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 h-16 flex items-center justify-between">
+        <div className="w-full px-4 sm:px-6 lg:px-8 h-16 flex items-center justify-between">
           <div className="flex items-center gap-2">
             <div className="bg-blue-600 p-2 rounded-lg">
               <Activity className="h-6 w-6 text-white" />
@@ -25,7 +25,7 @@ export const Layout: React.FC<LayoutProps> = ({ children, breadcrumbs }) => {
         
         {/* Breadcrumbs Bar */}
         <div className="bg-slate-50 border-b border-slate-200 px-4 sm:px-6 lg:px-8 py-3">
-            <nav className="max-w-7xl mx-auto flex items-center text-sm font-medium text-slate-500">
+            <nav className="w-full flex items-center text-sm font-medium text-slate-500">
               <button 
                 onClick={breadcrumbs[0]?.action}
                 className="hover:text-blue-600 transition-colors flex items-center gap-1"
@@ -50,7 +50,7 @@ export const Layout: React.FC<LayoutProps> = ({ children, breadcrumbs }) => {
       </header>
 
       {/* Main Content */}
-      <main className="flex-grow max-w-7xl mx-auto w-full px-4 sm:px-6 lg:px-8 py-8">
+      <main className="flex-grow w-full px-4 sm:px-6 lg:px-8 py-8">
         {children}
       </main>
     </div>

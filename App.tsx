@@ -2,7 +2,7 @@ import React, { useState, useEffect, useMemo } from 'react';
 import { Layout } from './components/Layout';
 import { Card, KPICard } from './components/Card';
 import { MotorCharts } from './components/MotorCharts';
-import { getZones, getLines, getMotors, generateMotorData, getAvailableWeeks } from './services/mockDataService';
+import { getZones, getLines, getMotors, generateMotorData, getAvailableWeeks } from './services/dataService';
 import { ZoneData, LineData, MotorLog, FilterState, AnalyticsSummary } from './types';
 import { Factory, Cog, Zap, AlertTriangle, Layers } from 'lucide-react';
 
@@ -33,41 +33,55 @@ const App = () => {
 
   // Initial Load
   useEffect(() => {
-    setZones(getZones());
-    const weeks = getAvailableWeeks();
-    setAllWeeks(weeks);
-    // Select the first week by default if available
-    if (weeks.length > 0) {
-      setFilters(prev => ({ ...prev, selectedWeeks: [weeks[0]] }));
-    }
+    let isMounted = true;
+    (async () => {
+      const zoneList = await getZones();
+      const weeks = await getAvailableWeeks();
+      if (!isMounted) return;
+      setZones(zoneList);
+      setAllWeeks(weeks);
+      if (weeks.length > 0) {
+        setFilters(prev => ({ ...prev, selectedWeeks: [weeks[0]] }));
+      }
+    })();
+    return () => {
+      isMounted = false;
+    };
   }, []);
 
   // Update Filters and Fetch Data
   useEffect(() => {
+    let isMounted = true;
     if (selectedZone && selectedLine && selectedMotor) {
-      const data = generateMotorData(
-        selectedZone.name,
-        selectedLine.name,
-        selectedMotor,
-        filters.selectedWeeks,
-        filters.selectedDay
-      );
-      setChartData(data);
+      (async () => {
+        const data = await generateMotorData(
+          selectedZone.name,
+          selectedLine.name,
+          selectedMotor,
+          filters.selectedWeeks,
+          filters.selectedDay
+        );
+        if (isMounted) setChartData(data);
+      })();
     }
+    return () => {
+      isMounted = false;
+    };
   }, [selectedZone, selectedLine, selectedMotor, filters]);
 
   // Handle Navigation
-  const handleZoneClick = (zone: ZoneData) => {
+  const handleZoneClick = async (zone: ZoneData) => {
     setSelectedZone(zone);
-    setLines(getLines(zone.name));
+    const lineList = await getLines(zone.name);
+    setLines(lineList);
     setView('LINES');
   };
 
-  const handleLineClick = (line: LineData) => {
+  const handleLineClick = async (line: LineData) => {
     setSelectedLine(line);
-    const motors = getMotors(line.zone, line.name);
+    const motors = await getMotors(line.zone, line.name);
     setAvailableMotors(motors);
-    setSelectedMotor(motors[0]); // Default to first motor
+    setSelectedMotor(motors[0]);
     setView('MOTOR_DETAIL');
   };
 

@@ -2,19 +2,48 @@
 <img width="1200" height="475" alt="GHBanner" src="https://github.com/user-attachments/assets/0aa67016-6eaf-458a-adb2-6e31a0763ed6" />
 </div>
 
-# Run and deploy your AI Studio app
+# MotorLog — Local Run
 
-This contains everything you need to run your app locally.
+## Prerequisites
 
-View your app in AI Studio: https://ai.studio/apps/drive/1ElyFHzq7k95QwpeUzLxdh4OQdJSLBdL8
+- Node.js
+- MSSQL (Docker recommended)
 
-## Run Locally
+## 1) Start MSSQL (Docker)
 
-**Prerequisites:**  Node.js
+```
+docker run -e "ACCEPT_EULA=Y" -e "SA_PASSWORD=Siemens123!" -p 2000:1433 -d --name mssql-server mcr.microsoft.com/mssql/server:latest
+```
 
+## 2) Install dependencies
 
-1. Install dependencies:
-   `npm install`
-2. Set the `GEMINI_API_KEY` in [.env.local](.env.local) to your Gemini API key
-3. Run the app:
-   `npm run dev`
+```
+npm install
+```
+
+## 3) Configure env
+
+Create a `.env` file from [.env.example](.env.example) for the API server:
+
+```
+cp .env.example .env
+```
+
+Create a `.env.local` file for Vite and set:
+
+```
+VITE_DATA_SOURCE=mssql
+VITE_API_BASE=http://localhost:4000
+```
+
+## 4) Run API server
+
+```
+npm run server
+```
+
+## 5) Run frontend
+
+```
+npm run dev
+```
