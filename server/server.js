@@ -163,7 +163,7 @@ app.get('/api/motor-logs', async (req, res) => {
         [IsMotorOn],
         [AvgCurrent],
         [RunningTime]
-      FROM [MotorLogDB].[dbo].[MotorLogs]
+      FROM [dbo].[MotorLogs]
       WHERE [MotorName] = @motor
         AND [Zone] = @zone
         AND [Line] = @line
