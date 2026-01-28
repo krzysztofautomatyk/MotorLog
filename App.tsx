@@ -6,7 +6,7 @@ import { CardSkeleton, ControlsSkeleton, ChartSkeleton } from './components/Skel
 import { DataAgeIndicator } from './components/DataAgeIndicator';
 import { ErrorBoundary } from './components/ErrorBoundary';
 import { useTheme } from './hooks/useTheme';
-import { getZones, getLines, getMotors, generateMotorData, getAvailableWeeks, checkApiHealth, DataServiceError } from './services/dataService';
+import { getZones, getLines, getMotors, generateMotorData, getLatestMotorData, getAvailableWeeks, checkApiHealth, DataServiceError } from './services/dataService';
 import { ZoneData, LineData, MotorLog, FilterState } from './types';
 import { Factory, Cog, Layers, RotateCcw, RefreshCw, AlertTriangle, Clock } from 'lucide-react';
 
@@ -139,17 +139,34 @@ const App = () => {
     let isMounted = true;
 
     if (selectedZone && selectedLine && selectedMotor) {
-      setLoading(prev => ({ ...prev, chartData: true }));
+      // Show loading only for initial load, not for auto-refresh updates
+      const isAutoRefreshUpdate = autoRefresh && refreshCounter > 0;
+      if (!isAutoRefreshUpdate) {
+        setLoading(prev => ({ ...prev, chartData: true }));
+      }
 
       (async () => {
         try {
-          const data = await generateMotorData(
-            selectedZone.name,
-            selectedLine.name,
-            selectedMotor,
-            filters.selectedWeeks,
-            filters.selectedDays
-          );
+          let data: MotorLog[];
+
+          if (autoRefresh) {
+            // Use lightweight endpoint for auto-refresh mode (last 15 minutes)
+            data = await getLatestMotorData(
+              selectedZone.name,
+              selectedLine.name,
+              selectedMotor,
+              15
+            );
+          } else {
+            // Use full endpoint when auto-refresh is OFF (filtered by weeks/days)
+            data = await generateMotorData(
+              selectedZone.name,
+              selectedLine.name,
+              selectedMotor,
+              filters.selectedWeeks,
+              filters.selectedDays
+            );
+          }
 
           if (isMounted) {
             setChartData(data);
@@ -174,7 +191,7 @@ const App = () => {
     return () => {
       isMounted = false;
     };
-  }, [selectedZone, selectedLine, selectedMotor, filters, refreshCounter]);
+  }, [selectedZone, selectedLine, selectedMotor, filters, refreshCounter, autoRefresh]);
 
   // Get last timestamp from data for age indicator
   const lastDataTimestamp = useMemo(() => {

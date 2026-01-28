@@ -185,6 +185,46 @@ app.get('/api/motor-logs', async (req, res) => {
   }
 });
 
+// Endpoint for auto-refresh mode - returns only last 15 minutes of data
+app.get('/api/motor-logs-latest', async (req, res) => {
+  const { zone, line, motor, minutes = 15 } = req.query;
+  if (!zone || !line || !motor) return res.status(400).json({ message: 'zone, line, motor are required' });
+
+  try {
+    const pool = await getPool();
+    const request = pool.request();
+    request.input('zone', sql.NVarChar, zone);
+    request.input('line', sql.NVarChar, line);
+    request.input('motor', sql.NVarChar, motor);
+    request.input('minutes', sql.Int, Number(minutes) || 15);
+
+    const result = await request.query(`
+      SELECT
+        [Id],
+        FORMAT([Timestamp], 'yyyy-MM-dd HH:mm:ss.fff') AS [Timestamp],
+        [MotorName],
+        [Zone],
+        [Line],
+        [ProductionWeek],
+        [MaxCurrentLimit],
+        [MotorCurrent],
+        [IsMotorOn],
+        [AvgCurrent],
+        [RunningTime]
+      FROM [dbo].[MotorLogs]
+      WHERE [MotorName] = @motor
+        AND [Zone] = @zone
+        AND [Line] = @line
+        AND [Timestamp] >= DATEADD(MINUTE, -@minutes, GETDATE())
+      ORDER BY [Timestamp] ASC;
+    `);
+
+    res.json(result.recordset);
+  } catch (err) {
+    res.status(500).json({ message: err.message });
+  }
+});
+
 const port = Number(process.env.API_PORT || 4000);
 app.listen(port, () => {
   console.log(`API listening on http://localhost:${port}`);

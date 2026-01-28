@@ -144,6 +144,24 @@ export const generateMotorData = async (
   return raw.map(normalizeMotorLog).sort((a, b) => a.timestampObj - b.timestampObj);
 };
 
+// Fetch latest motor data (for auto-refresh mode) - only last N minutes
+export const getLatestMotorData = async (
+  zone: string,
+  line: string,
+  motorName: string,
+  minutes: number = 15
+): Promise<MotorLog[]> => {
+  const params = new URLSearchParams({
+    zone,
+    line,
+    motor: motorName,
+    minutes: String(minutes)
+  });
+
+  const raw = await fetchJson<any[]>(`/api/motor-logs-latest?${params.toString()}`);
+  return raw.map(normalizeMotorLog).sort((a, b) => a.timestampObj - b.timestampObj);
+};
+
 // Health check function
 export const checkApiHealth = async (): Promise<{ status: 'ok' | 'error'; message?: string }> => {
   try {
