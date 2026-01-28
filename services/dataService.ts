@@ -1,14 +1,13 @@
-import { MotorLog, ZoneData, LineData, RawMotorLog } from '../types';
-import * as mock from './mockDataService';
+import { MotorLog, ZoneData, LineData } from '../types';
 
-const useMock = import.meta.env.VITE_DATA_SOURCE !== 'mssql';
-const API_BASE = import.meta.env.VITE_API_BASE || '';
+// ALWAYS use database - no fallback to mock data
+const API_BASE = import.meta.env.VITE_API_BASE || 'http://localhost:4000';
 
 console.log('🔍 DataService Config:', {
   VITE_DATA_SOURCE: import.meta.env.VITE_DATA_SOURCE,
   VITE_API_BASE: import.meta.env.VITE_API_BASE,
-  useMock,
-  API_BASE
+  API_BASE,
+  mode: 'DATABASE ONLY - No mock fallback'
 });
 
 const toNumber = (val: unknown, fallback = 0) => {
@@ -40,48 +39,61 @@ const normalizeMotorLog = (raw: any): MotorLog => {
   };
 };
 
-const fetchJson = async <T,>(path: string): Promise<T> => {
-  const res = await fetch(`${API_BASE}${path}`);
-  if (!res.ok) {
-    throw new Error(`Request failed: ${res.status}`);
+// Error class for API failures
+export class DataServiceError extends Error {
+  constructor(
+    message: string,
+    public statusCode?: number,
+    public endpoint?: string
+  ) {
+    super(message);
+    this.name = 'DataServiceError';
   }
-  return res.json();
+}
+
+const fetchJson = async <T,>(path: string): Promise<T> => {
+  const url = `${API_BASE}${path}`;
+
+  try {
+    const res = await fetch(url);
+
+    if (!res.ok) {
+      throw new DataServiceError(
+        `API request failed: ${res.status} ${res.statusText}`,
+        res.status,
+        path
+      );
+    }
+
+    return res.json();
+  } catch (error) {
+    if (error instanceof DataServiceError) {
+      throw error;
+    }
+
+    // Network error or other fetch failure
+    throw new DataServiceError(
+      `Network error: Unable to connect to API at ${url}. Make sure the server is running.`,
+      undefined,
+      path
+    );
+  }
 };
 
 export const getZones = async (): Promise<ZoneData[]> => {
-  if (useMock) return mock.getZones();
-  try {
-    return await fetchJson<ZoneData[]>('/api/zones');
-  } catch {
-    return mock.getZones();
-  }
+  return fetchJson<ZoneData[]>('/api/zones');
 };
 
 export const getLines = async (zone: string): Promise<LineData[]> => {
-  if (useMock) return mock.getLines(zone);
-  try {
-    return await fetchJson<LineData[]>(`/api/lines?zone=${encodeURIComponent(zone)}`);
-  } catch {
-    return mock.getLines(zone);
-  }
+  return fetchJson<LineData[]>(`/api/lines?zone=${encodeURIComponent(zone)}`);
 };
 
 export const getMotors = async (zone: string, line: string): Promise<string[]> => {
-  if (useMock) return mock.getMotors(zone, line);
-  try {
-    return await fetchJson<string[]>(`/api/motors?zone=${encodeURIComponent(zone)}&line=${encodeURIComponent(line)}`);
-  } catch {
-    return mock.getMotors(zone, line);
-  }
+  return fetchJson<string[]>(`/api/motors?zone=${encodeURIComponent(zone)}&line=${encodeURIComponent(line)}`);
 };
 
 export const getAvailableWeeks = async (): Promise<string[]> => {
-  if (useMock) return mock.getAvailableWeeks();
-  try {
-    return await fetchJson<string[]>('/api/weeks');
-  } catch {
-    return mock.getAvailableWeeks();
-  }
+  return fetchJson<string[]>('/api/weeks');
 };
 
 export const generateMotorData = async (
@@ -91,18 +103,27 @@ export const generateMotorData = async (
   weeks: string[],
   day: number | 'ALL'
 ): Promise<MotorLog[]> => {
-  if (useMock) return mock.generateMotorData(zone, line, motorName, weeks, day);
+  const params = new URLSearchParams({
+    zone,
+    line,
+    motor: motorName,
+    weeks: weeks.join(','),
+    day: String(day)
+  });
+
+  const raw = await fetchJson<any[]>(`/api/motor-logs?${params.toString()}`);
+  return raw.map(normalizeMotorLog).sort((a, b) => a.timestampObj - b.timestampObj);
+};
+
+// Health check function
+export const checkApiHealth = async (): Promise<{ status: 'ok' | 'error'; message?: string }> => {
   try {
-    const params = new URLSearchParams({
-      zone,
-      line,
-      motor: motorName,
-      weeks: weeks.join(','),
-      day: String(day)
-    });
-    const raw = await fetchJson<any[]>(`/api/motor-logs?${params.toString()}`);
-    return raw.map(normalizeMotorLog).sort((a, b) => a.timestampObj - b.timestampObj);
-  } catch {
-    return mock.generateMotorData(zone, line, motorName, weeks, day);
+    const result = await fetchJson<{ status: string }>('/api/health');
+    return { status: result.status === 'ok' ? 'ok' : 'error' };
+  } catch (error) {
+    return {
+      status: 'error',
+      message: error instanceof Error ? error.message : 'Unknown error'
+    };
   }
 };

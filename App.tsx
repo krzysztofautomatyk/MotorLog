@@ -1,15 +1,30 @@
-import React, { useState, useEffect, useMemo, useRef } from 'react';
+import React, { useState, useEffect, useMemo, useRef, useCallback } from 'react';
 import { Layout } from './components/Layout';
-import { Card, KPICard } from './components/Card';
+import { Card } from './components/Card';
 import { MotorCharts, MotorChartsHandle } from './components/MotorCharts';
-import { getZones, getLines, getMotors, generateMotorData, getAvailableWeeks } from './services/dataService';
-import { ZoneData, LineData, MotorLog, FilterState, AnalyticsSummary } from './types';
-import { Factory, Cog, Zap, AlertTriangle, Layers, RotateCcw, RefreshCw } from 'lucide-react';
+import { CardSkeleton, ControlsSkeleton, ChartSkeleton } from './components/Skeleton';
+import { DataAgeIndicator } from './components/DataAgeIndicator';
+import { ErrorBoundary } from './components/ErrorBoundary';
+import { useTheme } from './hooks/useTheme';
+import { getZones, getLines, getMotors, generateMotorData, getAvailableWeeks, checkApiHealth, DataServiceError } from './services/dataService';
+import { ZoneData, LineData, MotorLog, FilterState } from './types';
+import { Factory, Cog, Layers, RotateCcw, RefreshCw, AlertTriangle, Clock } from 'lucide-react';
 
 // View State Enum
 type ViewState = 'ZONES' | 'LINES' | 'MOTOR_DETAIL';
 
+// Loading states
+interface LoadingState {
+  zones: boolean;
+  lines: boolean;
+  motors: boolean;
+  chartData: boolean;
+}
+
 const App = () => {
+  // Theme
+  const { theme, setTheme } = useTheme();
+
   // Navigation State
   const [view, setView] = useState<ViewState>('ZONES');
   const [selectedZone, setSelectedZone] = useState<ZoneData | null>(null);
@@ -32,19 +47,74 @@ const App = () => {
   const [chartData, setChartData] = useState<MotorLog[]>([]);
   const chartsRef = useRef<MotorChartsHandle>(null);
 
-  // Initial Load
+  // Loading states
+  const [loading, setLoading] = useState<LoadingState>({
+    zones: true,
+    lines: false,
+    motors: false,
+    chartData: false
+  });
+
+  // Error state
+  const [error, setError] = useState<string | null>(null);
+
+  // API connection status
+  const [apiConnected, setApiConnected] = useState(true);
+
+  // Check API health on mount
+  useEffect(() => {
+    const checkHealth = async () => {
+      const result = await checkApiHealth();
+      setApiConnected(result.status === 'ok');
+    };
+    checkHealth();
+
+    // Re-check every 30 seconds
+    const interval = setInterval(checkHealth, 30000);
+    return () => clearInterval(interval);
+  }, []);
+
+  // Initial Load - Zones and Weeks
   useEffect(() => {
     let isMounted = true;
-    (async () => {
-      const zoneList = await getZones();
-      const weeks = await getAvailableWeeks();
-      if (!isMounted) return;
-      setZones(zoneList);
-      setAllWeeks(weeks);
-      if (weeks.length > 0) {
-        setFilters(prev => ({ ...prev, selectedWeeks: [weeks[0]] }));
+
+    const loadInitialData = async () => {
+      setLoading(prev => ({ ...prev, zones: true }));
+      setError(null);
+
+      try {
+        const [zoneList, weeks] = await Promise.all([
+          getZones(),
+          getAvailableWeeks()
+        ]);
+
+        if (!isMounted) return;
+
+        setZones(zoneList);
+        setAllWeeks(weeks);
+        setApiConnected(true);
+
+        if (weeks.length > 0) {
+          setFilters(prev => ({ ...prev, selectedWeeks: [weeks[0]] }));
+        }
+      } catch (err) {
+        if (!isMounted) return;
+
+        setApiConnected(false);
+        if (err instanceof DataServiceError) {
+          setError(err.message);
+        } else {
+          setError('Failed to load initial data. Make sure the API server is running.');
+        }
+      } finally {
+        if (isMounted) {
+          setLoading(prev => ({ ...prev, zones: false }));
+        }
       }
-    })();
+    };
+
+    loadInitialData();
+
     return () => {
       isMounted = false;
     };
@@ -67,86 +137,120 @@ const App = () => {
   // Update Filters and Fetch Data (including auto-refresh trigger)
   useEffect(() => {
     let isMounted = true;
+
     if (selectedZone && selectedLine && selectedMotor) {
+      setLoading(prev => ({ ...prev, chartData: true }));
+
       (async () => {
-        const data = await generateMotorData(
-          selectedZone.name,
-          selectedLine.name,
-          selectedMotor,
-          filters.selectedWeeks,
-          filters.selectedDay
-        );
-        if (isMounted) setChartData(data);
+        try {
+          const data = await generateMotorData(
+            selectedZone.name,
+            selectedLine.name,
+            selectedMotor,
+            filters.selectedWeeks,
+            filters.selectedDay
+          );
+
+          if (isMounted) {
+            setChartData(data);
+            setApiConnected(true);
+            setError(null);
+          }
+        } catch (err) {
+          if (isMounted) {
+            setApiConnected(false);
+            if (err instanceof DataServiceError) {
+              setError(err.message);
+            }
+          }
+        } finally {
+          if (isMounted) {
+            setLoading(prev => ({ ...prev, chartData: false }));
+          }
+        }
       })();
     }
+
     return () => {
       isMounted = false;
     };
   }, [selectedZone, selectedLine, selectedMotor, filters, refreshCounter]);
 
+  // Get last timestamp from data for age indicator
+  const lastDataTimestamp = useMemo(() => {
+    if (chartData.length === 0) return null;
+    return chartData[chartData.length - 1].timestamp;
+  }, [chartData]);
+
   // Handle Navigation
-  const handleZoneClick = async (zone: ZoneData) => {
+  const handleZoneClick = useCallback(async (zone: ZoneData) => {
     setSelectedZone(zone);
-    const lineList = await getLines(zone.name);
-    setLines(lineList);
-    setView('LINES');
-  };
+    setLoading(prev => ({ ...prev, lines: true }));
+    setError(null);
 
-  const handleLineClick = async (line: LineData) => {
+    try {
+      const lineList = await getLines(zone.name);
+      setLines(lineList);
+      setView('LINES');
+    } catch (err) {
+      if (err instanceof DataServiceError) {
+        setError(err.message);
+      }
+    } finally {
+      setLoading(prev => ({ ...prev, lines: false }));
+    }
+  }, []);
+
+  const handleLineClick = useCallback(async (line: LineData) => {
     setSelectedLine(line);
-    const motors = await getMotors(line.zone, line.name);
-    setAvailableMotors(motors);
-    setSelectedMotor(motors[0]);
-    setView('MOTOR_DETAIL');
-  };
+    setLoading(prev => ({ ...prev, motors: true }));
+    setError(null);
 
-  const resetToZones = () => {
+    try {
+      const motors = await getMotors(line.zone, line.name);
+      setAvailableMotors(motors);
+      setSelectedMotor(motors[0] || null);
+      setView('MOTOR_DETAIL');
+    } catch (err) {
+      if (err instanceof DataServiceError) {
+        setError(err.message);
+      }
+    } finally {
+      setLoading(prev => ({ ...prev, motors: false }));
+    }
+  }, []);
+
+  const resetToZones = useCallback(() => {
     setView('ZONES');
     setSelectedZone(null);
     setSelectedLine(null);
     setSelectedMotor(null);
-  };
+    setChartData([]);
+    setError(null);
+  }, []);
 
-  const resetToLines = () => {
+  const resetToLines = useCallback(() => {
     if (selectedZone) {
       setView('LINES');
       setSelectedLine(null);
       setSelectedMotor(null);
+      setChartData([]);
     }
-  };
+  }, [selectedZone]);
 
-  // Compute Analytics
-  const analytics: AnalyticsSummary = useMemo(() => {
-    if (chartData.length === 0) return { totalRunningTime: 0, peakCurrent: 0, averageEfficiency: 0, cycles: 0, maxLimitBreaches: 0 };
+  // Toggle week filter with debounce-like behavior
+  const handleWeekToggle = useCallback((week: string) => {
+    setFilters(prev => {
+      const newWeeks = prev.selectedWeeks.includes(week)
+        ? prev.selectedWeeks.filter(w => w !== week)
+        : [...prev.selectedWeeks, week];
 
-    let totalRun = 0;
-    let maxCur = 0;
-    let breaches = 0;
-    let transitions = 0;
-    let wasOn = -1;
-
-    chartData.forEach(d => {
-      // Assuming approximately uniform sampling for running time estimation or use RunningTime from data if cumulative
-      // Using d.isMotorOn which is 0 or 1
-      if (d.isMotorOn === 1) totalRun += 1; // Count samples roughly
-
-      if (d.motorCurrent > maxCur) maxCur = d.motorCurrent;
-      if (d.motorCurrent > d.maxCurrentLimit) breaches++;
-
-      if (d.isMotorOn !== wasOn) {
-        if (d.isMotorOn === 1 && wasOn !== -1) transitions++;
-        wasOn = d.isMotorOn;
+      if (newWeeks.length > 0) {
+        return { ...prev, selectedWeeks: newWeeks };
       }
+      return prev;
     });
-
-    return {
-      totalRunningTime: totalRun, // Simple count for relative metric
-      peakCurrent: parseFloat(maxCur.toFixed(2)),
-      averageEfficiency: 92, // Mock metric
-      cycles: transitions,
-      maxLimitBreaches: breaches
-    };
-  }, [chartData]);
+  }, []);
 
   // Breadcrumbs config
   const breadcrumbs = useMemo(() => {
@@ -155,39 +259,70 @@ const App = () => {
     if (selectedZone) crumbs.push({ label: selectedZone.name, action: view !== 'LINES' ? resetToLines : undefined });
     if (selectedLine) crumbs.push({ label: selectedLine.name });
     return crumbs;
-  }, [view, selectedZone, selectedLine]);
+  }, [view, selectedZone, selectedLine, resetToZones, resetToLines]);
 
   return (
-    <Layout breadcrumbs={breadcrumbs}>
+    <Layout
+      breadcrumbs={breadcrumbs}
+      theme={theme}
+      onThemeChange={setTheme}
+      apiConnected={apiConnected}
+    >
+      {/* Error Banner */}
+      {error && (
+        <div className="mb-6 p-4 bg-rose-50 dark:bg-rose-900/20 border border-rose-200 dark:border-rose-800 rounded-lg flex items-start gap-3">
+          <AlertTriangle className="h-5 w-5 text-rose-600 flex-shrink-0 mt-0.5" />
+          <div>
+            <h4 className="font-semibold text-rose-800 dark:text-rose-200">Connection Error</h4>
+            <p className="text-sm text-rose-700 dark:text-rose-300 mt-1">{error}</p>
+            <p className="text-xs text-rose-600 dark:text-rose-400 mt-2">
+              Make sure the API server is running: <code className="bg-rose-100 dark:bg-rose-800 px-1 rounded">npm run server</code>
+            </p>
+          </div>
+        </div>
+      )}
 
       {/* 1. ZONES VIEW */}
       {view === 'ZONES' && (
         <div className="space-y-6">
           <div className="flex items-center justify-between">
             <div>
-              <h2 className="text-2xl font-bold text-slate-900">Manufacturing Zones</h2>
-              <div className="text-sm text-slate-500 mt-1">Select a zone to view production lines</div>
+              <h2 className="text-2xl font-bold text-[var(--text-primary)]">Manufacturing Zones</h2>
+              <div className="text-sm text-[var(--text-secondary)] mt-1">Select a zone to view production lines</div>
             </div>
-            <div className="text-sm bg-blue-50 text-blue-700 px-3 py-1 rounded-full border border-blue-100 font-medium">
-              {zones.length} Active Zones
+            <div className="text-sm bg-blue-50 dark:bg-blue-900/30 text-blue-700 dark:text-blue-300 px-3 py-1 rounded-full border border-blue-100 dark:border-blue-800 font-medium">
+              {loading.zones ? '...' : `${zones.length} Active Zones`}
             </div>
           </div>
+
           <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6">
-            {zones.map((zone) => (
-              <Card
-                key={zone.name}
-                title={zone.name}
-                subtitle={`${zone.lineCount} Lines • ${zone.motorCount} Motors`}
-                icon={<Layers className="h-6 w-6" />}
-                status={zone.status}
-                onClick={() => handleZoneClick(zone)}
-              >
-                <div className="mt-4 pt-4 border-t border-slate-100 flex justify-between text-sm">
-                  <span className="text-slate-500">Efficiency</span>
-                  <span className="font-semibold text-slate-700">98.5%</span>
-                </div>
-              </Card>
-            ))}
+            {loading.zones ? (
+              <CardSkeleton count={4} />
+            ) : zones.length === 0 ? (
+              <div className="col-span-full text-center py-12 text-[var(--text-secondary)]">
+                <AlertTriangle className="h-12 w-12 mx-auto mb-4 text-amber-500" />
+                <p className="text-lg font-medium">No zones found</p>
+                <p className="text-sm mt-1">Check if the database has data</p>
+              </div>
+            ) : (
+              zones.map((zone) => (
+                <Card
+                  key={zone.name}
+                  title={zone.name}
+                  subtitle={`${zone.lineCount} Lines • ${zone.motorCount} Motors`}
+                  icon={<Layers className="h-6 w-6" />}
+                  status={zone.status}
+                  onClick={() => handleZoneClick(zone)}
+                >
+                  <div className="mt-4 pt-4 border-t border-[var(--border-primary)] flex justify-between text-sm">
+                    <span className="text-[var(--text-secondary)]">Status</span>
+                    <span className={`font-semibold ${zone.status === 'Healthy' ? 'text-emerald-600' :
+                        zone.status === 'Warning' ? 'text-amber-600' : 'text-rose-600'
+                      }`}>{zone.status}</span>
+                  </div>
+                </Card>
+              ))
+            )}
           </div>
         </div>
       )}
@@ -197,21 +332,31 @@ const App = () => {
         <div className="space-y-6">
           <div className="flex items-center justify-between">
             <div>
-              <h2 className="text-2xl font-bold text-slate-900">{selectedZone.name} Lines</h2>
-              <div className="text-sm text-slate-500 mt-1">Select a line to analyze motors</div>
+              <h2 className="text-2xl font-bold text-[var(--text-primary)]">{selectedZone.name} Lines</h2>
+              <div className="text-sm text-[var(--text-secondary)] mt-1">Select a line to analyze motors</div>
             </div>
           </div>
+
           <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
-            {lines.map((line) => (
-              <Card
-                key={line.name}
-                title={line.name}
-                subtitle={`${line.motorCount} Active Motors`}
-                icon={<Factory className="h-6 w-6" />}
-                onClick={() => handleLineClick(line)}
-                className="hover:border-blue-400"
-              />
-            ))}
+            {loading.lines ? (
+              <CardSkeleton count={3} />
+            ) : lines.length === 0 ? (
+              <div className="col-span-full text-center py-12 text-[var(--text-secondary)]">
+                <AlertTriangle className="h-12 w-12 mx-auto mb-4 text-amber-500" />
+                <p className="text-lg font-medium">No lines found in this zone</p>
+              </div>
+            ) : (
+              lines.map((line) => (
+                <Card
+                  key={line.name}
+                  title={line.name}
+                  subtitle={`${line.motorCount} Active Motors`}
+                  icon={<Factory className="h-6 w-6" />}
+                  onClick={() => handleLineClick(line)}
+                  className="hover:border-[var(--accent-blue)]"
+                />
+              ))
+            )}
           </div>
         </div>
       )}
@@ -221,108 +366,123 @@ const App = () => {
         <div className="space-y-2 animate-in fade-in slide-in-from-bottom-4 duration-500">
 
           {/* Compact Header Bar */}
-          <div className="bg-white p-3 rounded-lg border border-slate-200 shadow-sm flex flex-wrap items-center justify-between gap-4 sticky top-1 z-50">
+          {loading.motors ? (
+            <ControlsSkeleton />
+          ) : (
+            <div className="glass bg-[var(--bg-card)] p-3 rounded-lg border border-[var(--border-primary)] shadow-[var(--shadow-sm)] flex flex-wrap items-center justify-between gap-4 sticky top-[7.5rem] z-40">
 
-            {/* Left: Zone/Line/Motor Info + Selector */}
-            <div className="flex items-center gap-4">
-              <div className="flex items-center gap-2 text-sm">
-                <span className="text-slate-500 font-medium">Zone:</span>
-                <span className="font-bold text-slate-800">{selectedZone?.name}</span>
-                <span className="text-slate-300">|</span>
-                <span className="text-slate-500 font-medium">Line:</span>
-                <span className="font-bold text-slate-800">{selectedLine?.name}</span>
-              </div>
-              <div className="flex items-center gap-2 ml-2">
-                <Cog className="h-4 w-4 text-slate-400" />
-                <select
-                  className="px-2 py-1 bg-slate-50 border border-slate-300 rounded text-sm font-semibold focus:ring-2 focus:ring-blue-500 hover:bg-white transition-colors cursor-pointer"
-                  value={selectedMotor || ''}
-                  onChange={(e) => setSelectedMotor(e.target.value)}
-                >
-                  {availableMotors.map(m => <option key={m} value={m}>{m}</option>)}
-                </select>
-              </div>
-            </div>
-
-            {/* Middle: Linked Charts Indicator & 10m Reset + LIVE status */}
-            <div className="flex items-center gap-3">
-              <div className="flex items-center gap-2 bg-blue-50/50 px-3 py-1 rounded-full border border-blue-100">
-                <div className="flex items-center gap-1.5 text-xs font-semibold text-blue-700">
-                  <Layers className="h-3.5 w-3.5" />
-                  <span>Synchronized Charts</span>
+              {/* Left: Zone/Line/Motor Info + Selector */}
+              <div className="flex items-center gap-4">
+                <div className="flex items-center gap-2 text-sm">
+                  <span className="text-[var(--text-secondary)] font-medium">Zone:</span>
+                  <span className="font-bold text-[var(--text-primary)]">{selectedZone?.name}</span>
+                  <span className="text-[var(--text-tertiary)]">|</span>
+                  <span className="text-[var(--text-secondary)] font-medium">Line:</span>
+                  <span className="font-bold text-[var(--text-primary)]">{selectedLine?.name}</span>
                 </div>
-                <button
-                  onClick={() => chartsRef.current?.resetZoom()}
-                  className="flex items-center gap-1 px-2 py-0.5 rounded bg-white border border-blue-200 hover:bg-blue-600 hover:text-white hover:border-blue-600 transition-all text-[10px] uppercase tracking-wider font-bold shadow-sm"
-                  title="Reset view to last 10 minutes"
-                >
-                  <RotateCcw className="h-2.5 w-2.5" />
-                  10 Min
-                </button>
+                <div className="flex items-center gap-2 ml-2">
+                  <Cog className="h-4 w-4 text-[var(--text-tertiary)]" />
+                  <select
+                    className="px-2 py-1 bg-[var(--bg-tertiary)] border border-[var(--border-primary)] rounded text-sm font-semibold focus:ring-2 focus:ring-blue-500 hover:bg-[var(--bg-card)] transition-colors cursor-pointer text-[var(--text-primary)]"
+                    value={selectedMotor || ''}
+                    onChange={(e) => setSelectedMotor(e.target.value)}
+                  >
+                    {availableMotors.map(m => <option key={m} value={m}>{m}</option>)}
+                  </select>
+                </div>
               </div>
 
-              <div className="flex items-center gap-3 ml-2">
-                <span className="text-[10px] font-bold text-slate-400 uppercase tracking-widest">{chartData.length} pts</span>
-                {autoRefresh && (
-                  <span className="flex items-center gap-1 text-green-600 font-bold bg-green-50 px-2 py-0.5 rounded border border-green-100 text-[10px]">
-                    <RefreshCw className="h-2.5 w-2.5 animate-spin" style={{ animationDuration: '3s' }} />
-                    LIVE
+              {/* Middle: Linked Charts Indicator & 10m Reset + LIVE status + Data Age */}
+              <div className="flex items-center gap-3">
+                <div className="flex items-center gap-2 bg-blue-50/50 dark:bg-blue-900/20 px-3 py-1 rounded-full border border-blue-100 dark:border-blue-800">
+                  <div className="flex items-center gap-1.5 text-xs font-semibold text-blue-700 dark:text-blue-300">
+                    <Layers className="h-3.5 w-3.5" />
+                    <span>Synchronized</span>
+                  </div>
+                  <button
+                    onClick={() => chartsRef.current?.resetZoom()}
+                    className="flex items-center gap-1 px-2 py-0.5 rounded bg-[var(--bg-card)] border border-blue-200 dark:border-blue-700 hover:bg-blue-600 hover:text-white hover:border-blue-600 transition-all text-[10px] uppercase tracking-wider font-bold shadow-sm"
+                    title="Reset view to last 10 minutes of data"
+                  >
+                    <RotateCcw className="h-2.5 w-2.5" />
+                    10 Min
+                  </button>
+                </div>
+
+                <div className="flex items-center gap-3 ml-2">
+                  <span className="text-[10px] font-bold text-[var(--text-tertiary)] uppercase tracking-widest">
+                    {loading.chartData ? '...' : `${chartData.length} pts`}
                   </span>
-                )}
-              </div>
-            </div>
 
-            {/* Right: Filters + Auto-refresh checkbox */}
-            <div className="flex items-center gap-4">
-              {/* Week buttons */}
-              <div className="flex items-center gap-2">
-                <span className="text-xs text-slate-500 uppercase font-bold tracking-tight">Week:</span>
-                <div className="flex gap-1">
-                  {allWeeks.map(w => (
-                    <button
-                      key={w}
-                      onClick={() => {
-                        const newWeeks = filters.selectedWeeks.includes(w)
-                          ? filters.selectedWeeks.filter(wk => wk !== w)
-                          : [...filters.selectedWeeks, w];
-                        if (newWeeks.length > 0) setFilters({ ...filters, selectedWeeks: newWeeks });
-                      }}
-                      className={`px-2 py-1 rounded text-xs font-bold border transition-all ${filters.selectedWeeks.includes(w)
-                        ? 'bg-blue-600 text-white border-blue-600 shadow-md transform scale-105'
-                        : 'bg-white text-slate-600 border-slate-200 hover:bg-slate-50'
-                        }`}
-                    >
-                      {w}
-                    </button>
-                  ))}
+                  {/* Data Age Indicator */}
+                  <DataAgeIndicator lastTimestamp={lastDataTimestamp} autoRefresh={autoRefresh} />
+
+                  {autoRefresh && (
+                    <span className="flex items-center gap-1 text-emerald-600 dark:text-emerald-400 font-bold bg-emerald-50 dark:bg-emerald-900/30 px-2 py-0.5 rounded border border-emerald-100 dark:border-emerald-800 text-[10px] live-indicator">
+                      <RefreshCw className="h-2.5 w-2.5 animate-spin" style={{ animationDuration: '3s' }} />
+                      LIVE
+                    </span>
+                  )}
                 </div>
               </div>
 
-              {/* Day dropdown */}
-              <select
-                className="px-2 py-1 bg-white border border-slate-300 rounded text-xs font-bold text-slate-700 cursor-pointer hover:border-blue-400 transition-colors"
-                value={filters.selectedDay}
-                onChange={(e) => setFilters({ ...filters, selectedDay: e.target.value === 'ALL' ? 'ALL' : parseInt(e.target.value) })}
-              >
-                <option value="ALL">All Days</option>
-                {[1, 2, 3, 4, 5, 6, 7].map(d => <option key={d} value={d}>Day {d}</option>)}
-              </select>
+              {/* Right: Filters + Auto-refresh checkbox */}
+              <div className="flex items-center gap-4">
+                {/* Week buttons */}
+                <div className="flex items-center gap-2">
+                  <span className="text-xs text-[var(--text-secondary)] uppercase font-bold tracking-tight">Week:</span>
+                  <div className="flex gap-1">
+                    {allWeeks.map(w => (
+                      <button
+                        key={w}
+                        onClick={() => handleWeekToggle(w)}
+                        className={`px-2 py-1 rounded text-xs font-bold border transition-all ${filters.selectedWeeks.includes(w)
+                          ? 'bg-blue-600 text-white border-blue-600 shadow-md transform scale-105'
+                          : 'bg-[var(--bg-card)] text-[var(--text-secondary)] border-[var(--border-primary)] hover:bg-[var(--bg-tertiary)]'
+                          }`}
+                      >
+                        {w}
+                      </button>
+                    ))}
+                  </div>
+                </div>
 
-              {/* Auto-refresh checkbox */}
-              <label className="flex items-center gap-2 cursor-pointer bg-slate-50 px-2 py-1 rounded border border-slate-200 hover:bg-white transition-colors">
-                <input
-                  type="checkbox"
-                  checked={autoRefresh}
-                  onChange={(e) => setAutoRefresh(e.target.checked)}
-                  className="w-4 h-4 text-blue-600 rounded focus:ring-blue-500 accent-blue-600"
-                />
-                <span className="text-xs font-bold text-slate-600 uppercase tracking-tighter">Auto-refresh 10s</span>
-              </label>
+                {/* Day dropdown */}
+                <select
+                  className="px-2 py-1 bg-[var(--bg-card)] border border-[var(--border-primary)] rounded text-xs font-bold text-[var(--text-primary)] cursor-pointer hover:border-[var(--accent-blue)] transition-colors"
+                  value={filters.selectedDay}
+                  onChange={(e) => setFilters({ ...filters, selectedDay: e.target.value === 'ALL' ? 'ALL' : parseInt(e.target.value) })}
+                >
+                  <option value="ALL">All Days</option>
+                  {[1, 2, 3, 4, 5, 6, 7].map(d => <option key={d} value={d}>Day {d}</option>)}
+                </select>
+
+                {/* Auto-refresh checkbox */}
+                <label className="flex items-center gap-2 cursor-pointer bg-[var(--bg-tertiary)] px-2 py-1 rounded border border-[var(--border-primary)] hover:bg-[var(--bg-card)] transition-colors">
+                  <input
+                    type="checkbox"
+                    checked={autoRefresh}
+                    onChange={(e) => setAutoRefresh(e.target.checked)}
+                    className="w-4 h-4 text-blue-600 rounded focus:ring-blue-500 accent-blue-600"
+                  />
+                  <span className="text-xs font-bold text-[var(--text-secondary)] uppercase tracking-tighter">Auto 10s</span>
+                </label>
+              </div>
             </div>
-          </div>
+          )}
 
-          {/* Charts Area - Full Height */}
-          <MotorCharts ref={chartsRef} data={chartData} autoRefresh={autoRefresh} />
+          {/* Charts Area with Error Boundary */}
+          <ErrorBoundary>
+            {loading.chartData && chartData.length === 0 ? (
+              <div className="space-y-2">
+                <ChartSkeleton title="Average Current & Limits" />
+                <ChartSkeleton title="Real-time Motor Current" />
+                <ChartSkeleton title="Operational Status" />
+              </div>
+            ) : (
+              <MotorCharts ref={chartsRef} data={chartData} autoRefresh={autoRefresh} />
+            )}
+          </ErrorBoundary>
 
         </div>
       )}

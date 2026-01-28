@@ -2,7 +2,7 @@ import React, { useMemo, useState, useEffect, useRef } from 'react';
 import ReactECharts from 'echarts-for-react';
 import * as echarts from 'echarts';
 import { MotorLog } from '../types';
-import { Table, X, RotateCcw, RefreshCw } from 'lucide-react';
+import { Table, X, Clock, AlertCircle } from 'lucide-react';
 
 interface MotorChartsProps {
   data: MotorLog[];
@@ -43,6 +43,12 @@ export interface MotorChartsHandle {
   resetZoom: () => void;
 }
 
+// Helper to get CSS variable value
+const getCSSVar = (name: string, fallback: string): string => {
+  if (typeof window === 'undefined') return fallback;
+  return getComputedStyle(document.documentElement).getPropertyValue(name).trim() || fallback;
+};
+
 export const MotorCharts = React.forwardRef<MotorChartsHandle, MotorChartsProps>(({ data, autoRefresh = false }, ref) => {
   const [showOnOffTable, setShowOnOffTable] = useState(false);
 
@@ -69,41 +75,68 @@ export const MotorCharts = React.forwardRef<MotorChartsHandle, MotorChartsProps>
     return () => clearTimeout(timer);
   }, [data]);
 
-  // Calculate 10-minute window timestamp range
-  const getLast10MinRange = useMemo(() => {
-    if (data.length === 0) return null;
+  // Calculate 10-minute window based on CURRENT TIME (not last data timestamp)
+  // This ensures we always see the "live" window, even if data is old
+  const [currentTime, setCurrentTime] = useState(Date.now());
 
-    const lastTs = new Date(data[data.length - 1].timestamp).getTime();
-    const tenMinutes = 10 * 60 * 1000;
-    const startTs = lastTs - tenMinutes;
-
-    return { startValue: startTs, endValue: lastTs };
-  }, [data]);
-
-  // Auto-zoom to last 10 minutes when autoRefresh is ON and data changes
+  // Update current time every 10 seconds (synced with auto-refresh)
   useEffect(() => {
-    if (!autoRefresh || !getLast10MinRange) return;
+    if (!autoRefresh) return;
 
-    const charts = [
-      chart1Ref.current?.getEchartsInstance(),
-      chart2Ref.current?.getEchartsInstance(),
-      chart3Ref.current?.getEchartsInstance()
-    ];
+    const interval = setInterval(() => {
+      setCurrentTime(Date.now());
+    }, 10000);
 
-    charts.forEach(chart => {
-      if (chart) {
-        chart.dispatchAction({
-          type: 'dataZoom',
-          startValue: getLast10MinRange.startValue,
-          endValue: getLast10MinRange.endValue
-        });
-      }
-    });
-  }, [data, autoRefresh, getLast10MinRange]);
+    return () => clearInterval(interval);
+  }, [autoRefresh]);
 
-  // Manual reset zoom to last 10 minutes
+  const getLast10MinRange = useMemo(() => {
+    const now = currentTime;
+    const tenMinutes = 10 * 60 * 1000;
+    const startTs = now - tenMinutes;
+
+    return { startValue: startTs, endValue: now };
+  }, [currentTime]);
+
+  // Auto-zoom to current 10-minute window when:
+  // 1. Component mounts (initial render)
+  // 2. currentTime updates (every 10 seconds when autoRefresh is ON)
+  // 3. autoRefresh is enabled
+  useEffect(() => {
+    // Always apply the current time range, even if autoRefresh is OFF (for initial load)
+    const range = getLast10MinRange;
+
+    const applyZoom = () => {
+      const charts = [
+        chart1Ref.current?.getEchartsInstance(),
+        chart2Ref.current?.getEchartsInstance(),
+        chart3Ref.current?.getEchartsInstance()
+      ];
+
+      charts.forEach(chart => {
+        if (chart) {
+          chart.dispatchAction({
+            type: 'dataZoom',
+            startValue: range.startValue,
+            endValue: range.endValue
+          });
+        }
+      });
+    };
+
+    // Small delay to ensure charts are ready
+    const timer = setTimeout(applyZoom, 100);
+    return () => clearTimeout(timer);
+  }, [currentTime, getLast10MinRange]);
+
+  // Manual reset zoom to last 10 minutes (from NOW)
   const handleResetZoom = () => {
-    if (!getLast10MinRange) return;
+    // Update current time to NOW when manually resetting
+    const now = Date.now();
+    setCurrentTime(now);
+
+    const tenMinutes = 10 * 60 * 1000;
+    const range = { startValue: now - tenMinutes, endValue: now };
 
     const charts = [
       chart1Ref.current?.getEchartsInstance(),
@@ -115,8 +148,8 @@ export const MotorCharts = React.forwardRef<MotorChartsHandle, MotorChartsProps>
       if (chart) {
         chart.dispatchAction({
           type: 'dataZoom',
-          startValue: getLast10MinRange.startValue,
-          endValue: getLast10MinRange.endValue
+          startValue: range.startValue,
+          endValue: range.endValue
         });
       }
     });
@@ -170,30 +203,33 @@ export const MotorCharts = React.forwardRef<MotorChartsHandle, MotorChartsProps>
     return result;
   }, [data]);
 
-  // Common chart options - larger charts with initial 10-min zoom
+  // Common chart options - with theme-aware colors and FORCED time range
   const getCommonOptions = () => {
-    const initialZoom = getLast10MinRange ? {
-      startValue: getLast10MinRange.startValue,
-      endValue: getLast10MinRange.endValue
-    } : {
-      start: 0,
-      end: 100
-    };
+    const isDark = document.documentElement.getAttribute('data-theme') === 'dark';
+
+    // FORCE the time axis to show CURRENT TIME, not data time
+    const timeRange = getLast10MinRange;
 
     return {
       animation: false,
+      backgroundColor: 'transparent',
+      textStyle: {
+        color: isDark ? '#cbd5e1' : '#475569'
+      },
       grid: {
         left: 55,
         right: 15,
         top: 15,
         bottom: 50
       },
+      // DataZoom for user interaction (scrolling/zooming)
       dataZoom: [
         {
           type: 'inside',
           xAxisIndex: 0,
           filterMode: 'none',
-          ...initialZoom
+          startValue: timeRange.startValue,
+          endValue: timeRange.endValue
         },
         {
           type: 'slider',
@@ -201,7 +237,17 @@ export const MotorCharts = React.forwardRef<MotorChartsHandle, MotorChartsProps>
           filterMode: 'none',
           height: 18,
           bottom: 8,
-          ...initialZoom
+          backgroundColor: isDark ? '#334155' : '#f1f5f9',
+          fillerColor: isDark ? 'rgba(59, 130, 246, 0.3)' : 'rgba(59, 130, 246, 0.2)',
+          borderColor: isDark ? '#475569' : '#cbd5e1',
+          handleStyle: {
+            color: isDark ? '#60a5fa' : '#3b82f6'
+          },
+          textStyle: {
+            color: isDark ? '#94a3b8' : '#64748b'
+          },
+          startValue: timeRange.startValue,
+          endValue: timeRange.endValue
         }
       ],
       toolbox: {
@@ -211,170 +257,255 @@ export const MotorCharts = React.forwardRef<MotorChartsHandle, MotorChartsProps>
           },
           restore: {}
         },
-        right: 20
+        right: 20,
+        iconStyle: {
+          borderColor: isDark ? '#94a3b8' : '#64748b'
+        }
+      },
+      // Return xAxis config separately so each chart can merge it
+      _xAxisTimeRange: {
+        min: timeRange.startValue,
+        max: timeRange.endValue
       }
     };
   };
 
-  // Chart 1: Avg Current & Max Limit (compact)
-  const chart1Options = useMemo(() => ({
-    ...getCommonOptions(),
-    tooltip: {
-      trigger: 'axis',
-      confine: false,
-      appendToBody: true,
-      formatter: (params: any) => {
-        if (!params || params.length === 0) return '';
-        const dataIndex = params[0].dataIndex;
-        const d = chartData[dataIndex];
-        if (!d || d.avgCurrent === null) return '';
+  // Chart 1: Avg Current & Max Limit
+  const chart1Options = useMemo(() => {
+    const isDark = document.documentElement.getAttribute('data-theme') === 'dark';
+    const axisColor = isDark ? '#64748b' : '#94a3b8';
+    const splitLineColor = isDark ? '#334155' : '#e2e8f0';
 
-        const timeWithMs = formatTooltipTime(d.timestamp);
+    const commonOpts = getCommonOptions();
+    const { _xAxisTimeRange, ...restCommon } = commonOpts as any;
 
-        return `
-          <div style="font-weight: bold; margin-bottom: 8px;">${timeWithMs}</div>
-          <div style="color: #0ea5e9; font-weight: bold;">Avg Current: ${d.avgCurrent?.toFixed(2)} A</div>
-          <div style="color: #f43f5e;">Max Limit: ${d.maxLimit.toFixed(2)} A</div>
-          <div>Running Time: ${d.runningTime}</div>
-        `;
-      }
-    },
-    xAxis: {
-      type: 'time',
-      axisLabel: {
-        formatter: '{HH}:{mm}:{ss}'
-      }
-    },
-    yAxis: {
-      type: 'value',
-      name: 'Current (A)',
-      axisLabel: {
-        formatter: '{value} A'
-      }
-    },
-    series: [
-      {
-        name: 'Avg Current',
-        type: 'scatter',
-        symbolSize: 10,
-        data: chartData.map(d => [d.timestampMs, d.avgCurrent]),
-        itemStyle: {
-          color: '#0ea5e9'
+    return {
+      ...restCommon,
+      tooltip: {
+        trigger: 'axis',
+        confine: false,
+        appendToBody: true,
+        backgroundColor: isDark ? '#1e293b' : '#ffffff',
+        borderColor: isDark ? '#334155' : '#e2e8f0',
+        textStyle: {
+          color: isDark ? '#f1f5f9' : '#1e293b'
+        },
+        formatter: (params: any) => {
+          if (!params || params.length === 0) return '';
+          const dataIndex = params[0].dataIndex;
+          const d = chartData[dataIndex];
+          if (!d || d.avgCurrent === null) return '';
+
+          const timeWithMs = formatTooltipTime(d.timestamp);
+
+          return `
+            <div style="font-weight: bold; margin-bottom: 8px;">${timeWithMs}</div>
+            <div style="color: #0ea5e9; font-weight: bold;">Avg Current: ${d.avgCurrent?.toFixed(2)} A</div>
+            <div style="color: #f43f5e;">Max Limit: ${d.maxLimit.toFixed(2)} A</div>
+            <div>Running Time: ${d.runningTime}</div>
+          `;
         }
       },
-      {
-        name: 'Max Limit',
-        type: 'line',
-        step: 'end',
-        lineStyle: {
-          color: '#f43f5e',
-          width: 2,
-          type: 'dashed'
+      xAxis: {
+        type: 'time',
+        min: _xAxisTimeRange.min,
+        max: _xAxisTimeRange.max,
+        axisLine: { lineStyle: { color: axisColor } },
+        axisLabel: {
+          formatter: '{HH}:{mm}:{ss}',
+          color: isDark ? '#94a3b8' : '#64748b'
         },
-        showSymbol: false,
-        data: chartData.map(d => [d.timestampMs, d.maxLimit])
-      }
-    ]
-  }), [chartData, getCommonOptions]);
+        splitLine: { show: false }
+      },
+      yAxis: {
+        type: 'value',
+        name: 'Current (A)',
+        nameTextStyle: { color: isDark ? '#94a3b8' : '#64748b' },
+        axisLine: { lineStyle: { color: axisColor } },
+        axisLabel: {
+          formatter: '{value} A',
+          color: isDark ? '#94a3b8' : '#64748b'
+        },
+        splitLine: { lineStyle: { color: splitLineColor } }
+      },
+      series: [
+        {
+          name: 'Avg Current',
+          type: 'scatter',
+          symbolSize: 10,
+          data: chartData.map(d => [d.timestampMs, d.avgCurrent]),
+          itemStyle: {
+            color: '#0ea5e9'
+          }
+        },
+        {
+          name: 'Max Limit',
+          type: 'line',
+          step: 'end',
+          lineStyle: {
+            color: '#f43f5e',
+            width: 2,
+            type: 'dashed'
+          },
+          showSymbol: false,
+          data: chartData.map(d => [d.timestampMs, d.maxLimit])
+        }
+      ]
+    };
+  }, [chartData, getLast10MinRange]);
 
   // Chart 2: Real-time Motor Current
-  const chart2Options = useMemo(() => ({
-    ...getCommonOptions(),
-    tooltip: {
-      trigger: 'axis',
-      formatter: (params: any) => {
-        if (!params || params.length === 0) return '';
-        const p = params[0];
-        const timeWithMs = formatTooltipTime(p.value[0]);
-        return `
-          <div style="font-weight: bold; margin-bottom: 8px;">${timeWithMs}</div>
-          <div style="color: #8b5cf6;">Motor Current: ${p.value[1]?.toFixed(2)} A</div>
-        `;
-      }
-    },
-    xAxis: {
-      type: 'time',
-      axisLabel: {
-        formatter: '{HH}:{mm}:{ss}'
-      }
-    },
-    yAxis: {
-      type: 'value',
-      name: 'Current (A)',
-      axisLabel: {
-        formatter: '{value} A'
-      }
-    },
-    series: [
-      {
-        name: 'Motor Current',
-        type: 'line',
-        areaStyle: {
-          color: 'rgba(139, 92, 246, 0.2)'
+  const chart2Options = useMemo(() => {
+    const isDark = document.documentElement.getAttribute('data-theme') === 'dark';
+    const axisColor = isDark ? '#64748b' : '#94a3b8';
+    const splitLineColor = isDark ? '#334155' : '#e2e8f0';
+
+    const commonOpts = getCommonOptions();
+    const { _xAxisTimeRange, ...restCommon } = commonOpts as any;
+
+    return {
+      ...restCommon,
+      tooltip: {
+        trigger: 'axis',
+        backgroundColor: isDark ? '#1e293b' : '#ffffff',
+        borderColor: isDark ? '#334155' : '#e2e8f0',
+        textStyle: {
+          color: isDark ? '#f1f5f9' : '#1e293b'
         },
-        lineStyle: {
-          color: '#8b5cf6',
-          width: 2
+        formatter: (params: any) => {
+          if (!params || params.length === 0) return '';
+          const p = params[0];
+          const timeWithMs = formatTooltipTime(p.value[0]);
+          return `
+            <div style="font-weight: bold; margin-bottom: 8px;">${timeWithMs}</div>
+            <div style="color: #8b5cf6;">Motor Current: ${p.value[1]?.toFixed(2)} A</div>
+          `;
+        }
+      },
+      xAxis: {
+        type: 'time',
+        min: _xAxisTimeRange.min,
+        max: _xAxisTimeRange.max,
+        axisLine: { lineStyle: { color: axisColor } },
+        axisLabel: {
+          formatter: '{HH}:{mm}:{ss}',
+          color: isDark ? '#94a3b8' : '#64748b'
         },
-        showSymbol: false,
-        data: chartData.map(d => [d.timestampMs, d.motorCurrent])
-      }
-    ]
-  }), [chartData, getCommonOptions]);
+        splitLine: { show: false }
+      },
+      yAxis: {
+        type: 'value',
+        name: 'Current (A)',
+        nameTextStyle: { color: isDark ? '#94a3b8' : '#64748b' },
+        axisLine: { lineStyle: { color: axisColor } },
+        axisLabel: {
+          formatter: '{value} A',
+          color: isDark ? '#94a3b8' : '#64748b'
+        },
+        splitLine: { lineStyle: { color: splitLineColor } }
+      },
+      series: [
+        {
+          name: 'Motor Current',
+          type: 'line',
+          areaStyle: {
+            color: isDark
+              ? 'rgba(139, 92, 246, 0.15)'
+              : 'rgba(139, 92, 246, 0.2)'
+          },
+          lineStyle: {
+            color: '#8b5cf6',
+            width: 2
+          },
+          showSymbol: false,
+          data: chartData.map(d => [d.timestampMs, d.motorCurrent])
+        }
+      ]
+    };
+  }, [chartData, getLast10MinRange]);
 
   // Chart 3: ON/OFF Status
-  const chart3Options = useMemo(() => ({
-    ...getCommonOptions(),
-    tooltip: {
-      trigger: 'axis',
-      formatter: (params: any) => {
-        if (!params || params.length === 0) return '';
-        const p = params[0];
-        const timeWithMs = formatTooltipTime(p.value[0]);
-        return `
-          <div style="font-weight: bold; margin-bottom: 8px;">${timeWithMs}</div>
-          <div style="color: #10b981;">Status: ${p.value[1] === 1 ? 'ON' : 'OFF'}</div>
-        `;
-      }
-    },
-    xAxis: {
-      type: 'time',
-      axisLabel: {
-        formatter: '{HH}:{mm}:{ss}'
-      }
-    },
-    yAxis: {
-      type: 'value',
-      min: -0.1,
-      max: 1.3,
-      interval: 1,
-      axisLabel: {
-        formatter: (value: number) => value === 1 ? 'ON' : value === 0 ? 'OFF' : ''
-      }
-    },
-    series: [
-      {
-        name: 'Status',
-        type: 'line',
-        step: 'end',
-        areaStyle: {
-          color: 'rgba(16, 185, 129, 0.3)'
+  const chart3Options = useMemo(() => {
+    const isDark = document.documentElement.getAttribute('data-theme') === 'dark';
+    const axisColor = isDark ? '#64748b' : '#94a3b8';
+    const splitLineColor = isDark ? '#334155' : '#e2e8f0';
+
+    const commonOpts = getCommonOptions();
+    const { _xAxisTimeRange, ...restCommon } = commonOpts as any;
+
+    return {
+      ...restCommon,
+      tooltip: {
+        trigger: 'axis',
+        backgroundColor: isDark ? '#1e293b' : '#ffffff',
+        borderColor: isDark ? '#334155' : '#e2e8f0',
+        textStyle: {
+          color: isDark ? '#f1f5f9' : '#1e293b'
         },
-        lineStyle: {
-          color: '#10b981',
-          width: 2
+        formatter: (params: any) => {
+          if (!params || params.length === 0) return '';
+          const p = params[0];
+          const timeWithMs = formatTooltipTime(p.value[0]);
+          return `
+            <div style="font-weight: bold; margin-bottom: 8px;">${timeWithMs}</div>
+            <div style="color: #10b981;">Status: ${p.value[1] === 1 ? 'ON' : 'OFF'}</div>
+          `;
+        }
+      },
+      xAxis: {
+        type: 'time',
+        min: _xAxisTimeRange.min,
+        max: _xAxisTimeRange.max,
+        axisLine: { lineStyle: { color: axisColor } },
+        axisLabel: {
+          formatter: '{HH}:{mm}:{ss}',
+          color: isDark ? '#94a3b8' : '#64748b'
         },
-        showSymbol: false,
-        data: onOffData.map(d => [d.timestampMs, d.value])
-      }
-    ]
-  }), [onOffData, getCommonOptions]);
+        splitLine: { show: false }
+      },
+      yAxis: {
+        type: 'value',
+        min: -0.1,
+        max: 1.3,
+        interval: 1,
+        axisLine: { lineStyle: { color: axisColor } },
+        axisLabel: {
+          formatter: (value: number) => value === 1 ? 'ON' : value === 0 ? 'OFF' : '',
+          color: isDark ? '#94a3b8' : '#64748b'
+        },
+        splitLine: { lineStyle: { color: splitLineColor } }
+      },
+      series: [
+        {
+          name: 'Status',
+          type: 'line',
+          step: 'end',
+          areaStyle: {
+            color: isDark
+              ? 'rgba(16, 185, 129, 0.2)'
+              : 'rgba(16, 185, 129, 0.3)'
+          },
+          lineStyle: {
+            color: '#10b981',
+            width: 2
+          },
+          showSymbol: false,
+          data: onOffData.map(d => [d.timestampMs, d.value])
+        }
+      ]
+    };
+  }, [onOffData, getLast10MinRange]);
 
   if (!data || data.length === 0) {
     return (
-      <div className="h-96 flex flex-col items-center justify-center text-slate-400 bg-slate-50 rounded-xl border-2 border-dashed border-slate-200">
-        <p>No telemetry data available for selected filters.</p>
-        <p className="text-xs mt-2">Try selecting a different Production Week or Day.</p>
+      <div className="h-96 flex flex-col items-center justify-center text-[var(--text-tertiary)] bg-[var(--bg-tertiary)] rounded-xl border-2 border-dashed border-[var(--border-primary)]">
+        <AlertCircle className="h-12 w-12 mb-4 text-amber-500" />
+        <p className="text-lg font-medium">No telemetry data available</p>
+        <p className="text-sm mt-2">Try selecting a different Production Week or Day.</p>
+        <div className="mt-4 flex items-center gap-2 text-xs bg-[var(--bg-card)] px-3 py-2 rounded-lg border border-[var(--border-primary)]">
+          <Clock className="h-4 w-4" />
+          <span>Auto-refresh will fetch new data every 10 seconds</span>
+        </div>
       </div>
     );
   }
@@ -382,19 +513,17 @@ export const MotorCharts = React.forwardRef<MotorChartsHandle, MotorChartsProps>
   return (
     <div className="flex flex-col gap-2">
 
-
-
       {/* Chart 1: Average Current & Limits */}
-      <div className="bg-white p-3 rounded-lg border border-slate-200 shadow-sm relative overflow-hidden">
+      <div className="bg-[var(--bg-card)] p-3 rounded-lg border border-[var(--border-primary)] shadow-[var(--shadow-sm)] relative overflow-hidden">
         <div className="mb-2 flex justify-between items-center">
           <div>
-            <h3 className="font-semibold text-slate-800 text-sm">Average Current & Limits</h3>
+            <h3 className="font-semibold text-[var(--text-primary)] text-sm">Average Current & Limits</h3>
           </div>
           <div className="flex gap-2">
-            <span className="flex items-center text-xs text-rose-600 font-medium bg-rose-50 px-2 py-1 rounded border border-rose-100">
+            <span className="flex items-center text-xs text-rose-600 font-medium bg-rose-50 dark:bg-rose-900/30 px-2 py-1 rounded border border-rose-100 dark:border-rose-800">
               <div className="w-4 h-0.5 mr-1" style={{ borderTop: '2px dashed #f43f5e' }}></div> Limit
             </span>
-            <span className="flex items-center text-xs text-cyan-600 font-medium bg-cyan-50 px-2 py-1 rounded border border-cyan-100">
+            <span className="flex items-center text-xs text-cyan-600 font-medium bg-cyan-50 dark:bg-cyan-900/30 px-2 py-1 rounded border border-cyan-100 dark:border-cyan-800">
               <div className="w-2 h-2 rounded-full bg-cyan-500 mr-1"></div> Avg Current
             </span>
           </div>
@@ -413,8 +542,8 @@ export const MotorCharts = React.forwardRef<MotorChartsHandle, MotorChartsProps>
       </div>
 
       {/* Chart 2: Real-time Motor Current */}
-      <div className="bg-white p-3 rounded-lg border border-slate-200 shadow-sm">
-        <h3 className="font-semibold text-slate-800 text-sm mb-1">Real-time Motor Current</h3>
+      <div className="bg-[var(--bg-card)] p-3 rounded-lg border border-[var(--border-primary)] shadow-[var(--shadow-sm)]">
+        <h3 className="font-semibold text-[var(--text-primary)] text-sm mb-1">Real-time Motor Current</h3>
         <ReactECharts
           ref={chart2Ref}
           option={chart2Options}
@@ -429,14 +558,14 @@ export const MotorCharts = React.forwardRef<MotorChartsHandle, MotorChartsProps>
       </div>
 
       {/* Chart 3: ON/OFF Status */}
-      <div className="bg-white p-3 rounded-lg border border-slate-200 shadow-sm">
+      <div className="bg-[var(--bg-card)] p-3 rounded-lg border border-[var(--border-primary)] shadow-[var(--shadow-sm)]">
         <div className="flex justify-between items-center mb-2">
-          <h3 className="font-semibold text-slate-800 text-sm">Operational Status (ON/OFF)</h3>
+          <h3 className="font-semibold text-[var(--text-primary)] text-sm">Operational Status (ON/OFF)</h3>
           <button
             onClick={() => setShowOnOffTable(!showOnOffTable)}
             className={`flex items-center gap-1 px-2 py-1 rounded text-xs transition-colors ${showOnOffTable
               ? 'bg-emerald-600 text-white hover:bg-emerald-700'
-              : 'bg-slate-100 text-slate-700 hover:bg-emerald-100 hover:text-emerald-700'
+              : 'bg-[var(--bg-tertiary)] text-[var(--text-secondary)] hover:bg-emerald-100 hover:text-emerald-700 dark:hover:bg-emerald-900/30 dark:hover:text-emerald-400'
               }`}
           >
             {showOnOffTable ? <X className="h-3 w-3" /> : <Table className="h-3 w-3" />}
@@ -446,22 +575,22 @@ export const MotorCharts = React.forwardRef<MotorChartsHandle, MotorChartsProps>
 
         {/* ON/OFF Table */}
         {showOnOffTable && (
-          <div className="mb-4 max-h-96 overflow-auto border border-slate-200 rounded-lg shadow-inner bg-white">
+          <div className="mb-4 max-h-96 overflow-auto border border-[var(--border-primary)] rounded-lg shadow-inner bg-[var(--bg-card)]">
             <table className="w-full text-sm">
-              <thead className="bg-slate-100 sticky top-0 border-b border-slate-200 z-10">
+              <thead className="bg-[var(--bg-tertiary)] sticky top-0 border-b border-[var(--border-primary)] z-10">
                 <tr>
-                  <th className="px-4 py-2 text-left font-mono font-semibold text-slate-600">Timestamp</th>
-                  <th className="px-4 py-2 text-left font-mono font-semibold text-slate-600">Value (0/1)</th>
-                  <th className="px-4 py-2 text-left font-semibold text-slate-600">State</th>
+                  <th className="px-4 py-2 text-left font-mono font-semibold text-[var(--text-secondary)]">Timestamp</th>
+                  <th className="px-4 py-2 text-left font-mono font-semibold text-[var(--text-secondary)]">Value (0/1)</th>
+                  <th className="px-4 py-2 text-left font-semibold text-[var(--text-secondary)]">State</th>
                 </tr>
               </thead>
               <tbody>
                 {onOffData.map((row, idx) => (
-                  <tr key={idx} className={`border-b border-slate-100 hover:bg-slate-50 ${row.value === 1 ? 'bg-emerald-50/30' : ''}`}>
-                    <td className="px-4 py-1 font-mono text-xs text-slate-600">{new Date(row.timestampMs).toISOString()}</td>
-                    <td className="px-4 py-1 font-mono font-bold text-slate-800">{row.value}</td>
+                  <tr key={idx} className={`border-b border-[var(--border-primary)] hover:bg-[var(--bg-tertiary)] ${row.value === 1 ? 'bg-emerald-50/30 dark:bg-emerald-900/10' : ''}`}>
+                    <td className="px-4 py-1 font-mono text-xs text-[var(--text-secondary)]">{new Date(row.timestampMs).toISOString()}</td>
+                    <td className="px-4 py-1 font-mono font-bold text-[var(--text-primary)]">{row.value}</td>
                     <td className="px-4 py-1">
-                      <span className={`text-xs font-bold px-2 py-0.5 rounded ${row.value === 1 ? 'bg-emerald-100 text-emerald-700' : 'bg-red-100 text-red-700'}`}>
+                      <span className={`text-xs font-bold px-2 py-0.5 rounded ${row.value === 1 ? 'bg-emerald-100 text-emerald-700 dark:bg-emerald-900/40 dark:text-emerald-400' : 'bg-red-100 text-red-700 dark:bg-red-900/40 dark:text-red-400'}`}>
                         {row.label}
                       </span>
                     </td>
@@ -488,3 +617,5 @@ export const MotorCharts = React.forwardRef<MotorChartsHandle, MotorChartsProps>
     </div>
   );
 });
+
+MotorCharts.displayName = 'MotorCharts';

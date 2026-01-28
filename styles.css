@@ -2,26 +2,193 @@
 @tailwind components;
 @tailwind utilities;
 
-body {
-  font-family: 'Inter', sans-serif;
-  background-color: #f8fafc;
+/* Google Fonts Import */
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&display=swap');
+
+/* Root CSS Variables for theming */
+:root {
+  /* Light mode */
+  --bg-primary: #f8fafc;
+  --bg-secondary: #ffffff;
+  --bg-tertiary: #f1f5f9;
+  --bg-card: #ffffff;
+  --bg-card-hover: #f8fafc;
+  
+  --text-primary: #0f172a;
+  --text-secondary: #475569;
+  --text-tertiary: #94a3b8;
+  --text-accent: #2563eb;
+  
+  --border-primary: #e2e8f0;
+  --border-secondary: #cbd5e1;
+  
+  --shadow-sm: 0 1px 2px 0 rgb(0 0 0 / 0.05);
+  --shadow-md: 0 4px 6px -1px rgb(0 0 0 / 0.1), 0 2px 4px -2px rgb(0 0 0 / 0.1);
+  --shadow-lg: 0 10px 15px -3px rgb(0 0 0 / 0.1);
+  
+  --accent-blue: #2563eb;
+  --accent-cyan: #0ea5e9;
+  --accent-emerald: #10b981;
+  --accent-rose: #f43f5e;
+  --accent-violet: #8b5cf6;
+  --accent-amber: #f59e0b;
+  
+  /* Glassmorphism */
+  --glass-bg: rgba(255, 255, 255, 0.7);
+  --glass-border: rgba(255, 255, 255, 0.5);
+  --glass-blur: blur(12px);
 }
 
-/* Custom Scrollbar for charts */
+/* Dark mode */
+[data-theme="dark"] {
+  --bg-primary: #0f172a;
+  --bg-secondary: #1e293b;
+  --bg-tertiary: #334155;
+  --bg-card: #1e293b;
+  --bg-card-hover: #334155;
+  
+  --text-primary: #f8fafc;
+  --text-secondary: #cbd5e1;
+  --text-tertiary: #64748b;
+  --text-accent: #60a5fa;
+  
+  --border-primary: #334155;
+  --border-secondary: #475569;
+  
+  --shadow-sm: 0 1px 2px 0 rgb(0 0 0 / 0.3);
+  --shadow-md: 0 4px 6px -1px rgb(0 0 0 / 0.4), 0 2px 4px -2px rgb(0 0 0 / 0.3);
+  --shadow-lg: 0 10px 15px -3px rgb(0 0 0 / 0.4);
+  
+  /* Glassmorphism dark */
+  --glass-bg: rgba(30, 41, 59, 0.8);
+  --glass-border: rgba(51, 65, 85, 0.5);
+}
+
+body {
+  font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+  background-color: var(--bg-primary);
+  color: var(--text-primary);
+  transition: background-color 0.3s ease, color 0.3s ease;
+}
+
+/* Custom Scrollbar */
 ::-webkit-scrollbar {
   width: 8px;
   height: 8px;
 }
 
 ::-webkit-scrollbar-track {
-  background: #f1f5f9;
+  background: var(--bg-tertiary);
+  border-radius: 4px;
 }
 
 ::-webkit-scrollbar-thumb {
-  background: #cbd5e1;
+  background: var(--border-secondary);
   border-radius: 4px;
 }
 
 ::-webkit-scrollbar-thumb:hover {
-  background: #94a3b8;
+  background: var(--text-tertiary);
+}
+
+/* Skeleton Loading Animation */
+@keyframes skeleton-pulse {
+  0%, 100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0.4;
+  }
+}
+
+.skeleton {
+  background: linear-gradient(
+    90deg,
+    var(--bg-tertiary) 25%,
+    var(--border-primary) 50%,
+    var(--bg-tertiary) 75%
+  );
+  background-size: 200% 100%;
+  animation: skeleton-shimmer 1.5s infinite;
+}
+
+@keyframes skeleton-shimmer {
+  0% {
+    background-position: 200% 0;
+  }
+  100% {
+    background-position: -200% 0;
+  }
+}
+
+/* Glassmorphism utility */
+.glass {
+  background: var(--glass-bg);
+  backdrop-filter: var(--glass-blur);
+  -webkit-backdrop-filter: var(--glass-blur);
+  border: 1px solid var(--glass-border);
+}
+
+/* Smooth transitions for theme switch */
+* {
+  transition-property: background-color, border-color, color;
+  transition-duration: 0.2s;
+  transition-timing-function: ease;
+}
+
+/* Chart styles override for dark mode */
+[data-theme="dark"] .echarts-tooltip {
+  background: var(--bg-secondary) !important;
+  border-color: var(--border-primary) !important;
+  color: var(--text-primary) !important;
+}
+
+/* Focus visible for accessibility */
+:focus-visible {
+  outline: 2px solid var(--accent-blue);
+  outline-offset: 2px;
+}
+
+/* High contrast mode support */
+@media (prefers-contrast: high) {
+  :root {
+    --text-primary: #000000;
+    --text-secondary: #1f2937;
+    --border-primary: #374151;
+  }
+  
+  [data-theme="dark"] {
+    --text-primary: #ffffff;
+    --text-secondary: #e5e7eb;
+    --border-primary: #9ca3af;
+  }
+}
+
+/* Animation for live indicator */
+@keyframes pulse-live {
+  0%, 100% {
+    opacity: 1;
+    transform: scale(1);
+  }
+  50% {
+    opacity: 0.7;
+    transform: scale(1.05);
+  }
+}
+
+.live-indicator {
+  animation: pulse-live 2s ease-in-out infinite;
+}
+
+/* Data age indicator colors */
+.data-fresh {
+  color: var(--accent-emerald);
+}
+
+.data-stale {
+  color: var(--accent-amber);
+}
+
+.data-old {
+  color: var(--accent-rose);
 }
