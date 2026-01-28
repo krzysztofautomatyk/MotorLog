@@ -26,19 +26,24 @@ const CHART_GROUP = 'motor-charts-group';
 
 const formatTooltipTime = (timestamp: string | number): string => {
   const date = new Date(timestamp);
-  const formattedTime = date.toLocaleString('pl-PL', {
+  const formattedTime = date.toLocaleString('en-US', {
     day: '2-digit',
     month: '2-digit',
     year: 'numeric',
     hour: '2-digit',
     minute: '2-digit',
-    second: '2-digit'
+    second: '2-digit',
+    hour12: false
   });
   const ms = date.getMilliseconds().toString().padStart(3, '0');
   return `${formattedTime}.${ms}`;
 };
 
-export const MotorCharts: React.FC<MotorChartsProps> = ({ data, autoRefresh = false }) => {
+export interface MotorChartsHandle {
+  resetZoom: () => void;
+}
+
+export const MotorCharts = React.forwardRef<MotorChartsHandle, MotorChartsProps>(({ data, autoRefresh = false }, ref) => {
   const [showOnOffTable, setShowOnOffTable] = useState(false);
 
   // Refs for chart instances
@@ -64,26 +69,21 @@ export const MotorCharts: React.FC<MotorChartsProps> = ({ data, autoRefresh = fa
     return () => clearTimeout(timer);
   }, [data]);
 
-  // Calculate default 10-minute zoom start/end percentages
-  const default10MinZoom = useMemo(() => {
-    if (data.length === 0) return { start: 0, end: 100 };
+  // Calculate 10-minute window timestamp range
+  const getLast10MinRange = useMemo(() => {
+    if (data.length === 0) return null;
 
-    const firstTs = new Date(data[0].timestamp).getTime();
     const lastTs = new Date(data[data.length - 1].timestamp).getTime();
-    const totalRange = lastTs - firstTs;
-
-    if (totalRange <= 0) return { start: 0, end: 100 };
-
-    // Calculate start position for last 10 minutes
     const tenMinutes = 10 * 60 * 1000;
     const startTs = lastTs - tenMinutes;
-    const startPercent = Math.max(0, ((startTs - firstTs) / totalRange) * 100);
 
-    return { start: startPercent, end: 100 };
+    return { startValue: startTs, endValue: lastTs };
   }, [data]);
 
-  // Reset zoom to last 10 minutes
-  const handleResetZoom = () => {
+  // Auto-zoom to last 10 minutes when autoRefresh is ON and data changes
+  useEffect(() => {
+    if (!autoRefresh || !getLast10MinRange) return;
+
     const charts = [
       chart1Ref.current?.getEchartsInstance(),
       chart2Ref.current?.getEchartsInstance(),
@@ -94,12 +94,38 @@ export const MotorCharts: React.FC<MotorChartsProps> = ({ data, autoRefresh = fa
       if (chart) {
         chart.dispatchAction({
           type: 'dataZoom',
-          start: default10MinZoom.start,
-          end: 100
+          startValue: getLast10MinRange.startValue,
+          endValue: getLast10MinRange.endValue
+        });
+      }
+    });
+  }, [data, autoRefresh, getLast10MinRange]);
+
+  // Manual reset zoom to last 10 minutes
+  const handleResetZoom = () => {
+    if (!getLast10MinRange) return;
+
+    const charts = [
+      chart1Ref.current?.getEchartsInstance(),
+      chart2Ref.current?.getEchartsInstance(),
+      chart3Ref.current?.getEchartsInstance()
+    ];
+
+    charts.forEach(chart => {
+      if (chart) {
+        chart.dispatchAction({
+          type: 'dataZoom',
+          startValue: getLast10MinRange.startValue,
+          endValue: getLast10MinRange.endValue
         });
       }
     });
   };
+
+  // Expose resetZoom via ref
+  React.useImperativeHandle(ref, () => ({
+    resetZoom: handleResetZoom
+  }));
 
   // Prepare chart data
   const chartData = useMemo(() => {
@@ -144,43 +170,51 @@ export const MotorCharts: React.FC<MotorChartsProps> = ({ data, autoRefresh = fa
     return result;
   }, [data]);
 
-  // Common chart options - larger charts
-  const getCommonOptions = () => ({
-    animation: false,
-    grid: {
-      left: 55,
-      right: 15,
-      top: 15,
-      bottom: 50
-    },
-    dataZoom: [
-      {
-        type: 'inside',
-        xAxisIndex: 0,
-        filterMode: 'none',
-        start: default10MinZoom.start,
-        end: 100
+  // Common chart options - larger charts with initial 10-min zoom
+  const getCommonOptions = () => {
+    const initialZoom = getLast10MinRange ? {
+      startValue: getLast10MinRange.startValue,
+      endValue: getLast10MinRange.endValue
+    } : {
+      start: 0,
+      end: 100
+    };
+
+    return {
+      animation: false,
+      grid: {
+        left: 55,
+        right: 15,
+        top: 15,
+        bottom: 50
       },
-      {
-        type: 'slider',
-        xAxisIndex: 0,
-        filterMode: 'none',
-        height: 18,
-        bottom: 8,
-        start: default10MinZoom.start,
-        end: 100
-      }
-    ],
-    toolbox: {
-      feature: {
-        dataZoom: {
-          yAxisIndex: 'none'
+      dataZoom: [
+        {
+          type: 'inside',
+          xAxisIndex: 0,
+          filterMode: 'none',
+          ...initialZoom
         },
-        restore: {}
-      },
-      right: 20
-    }
-  });
+        {
+          type: 'slider',
+          xAxisIndex: 0,
+          filterMode: 'none',
+          height: 18,
+          bottom: 8,
+          ...initialZoom
+        }
+      ],
+      toolbox: {
+        feature: {
+          dataZoom: {
+            yAxisIndex: 'none'
+          },
+          restore: {}
+        },
+        right: 20
+      }
+    };
+  };
 
   // Chart 1: Avg Current & Max Limit (compact)
   const chart1Options = useMemo(() => ({
@@ -222,7 +256,7 @@ export const MotorCharts: React.FC<MotorChartsProps> = ({ data, autoRefresh = fa
       {
         name: 'Avg Current',
         type: 'scatter',
-        symbolSize: 6,
+        symbolSize: 10,
         data: chartData.map(d => [d.timestampMs, d.avgCurrent]),
         itemStyle: {
           color: '#0ea5e9'
@@ -241,7 +275,7 @@ export const MotorCharts: React.FC<MotorChartsProps> = ({ data, autoRefresh = fa
         data: chartData.map(d => [d.timestampMs, d.maxLimit])
       }
     ]
-  }), [chartData]);
+  }), [chartData, getCommonOptions]);
 
   // Chart 2: Real-time Motor Current
   const chart2Options = useMemo(() => ({
@@ -286,7 +320,7 @@ export const MotorCharts: React.FC<MotorChartsProps> = ({ data, autoRefresh = fa
         data: chartData.map(d => [d.timestampMs, d.motorCurrent])
       }
     ]
-  }), [chartData]);
+  }), [chartData, getCommonOptions]);
 
   // Chart 3: ON/OFF Status
   const chart3Options = useMemo(() => ({
@@ -334,7 +368,7 @@ export const MotorCharts: React.FC<MotorChartsProps> = ({ data, autoRefresh = fa
         data: onOffData.map(d => [d.timestampMs, d.value])
       }
     ]
-  }), [onOffData]);
+  }), [onOffData, getCommonOptions]);
 
   if (!data || data.length === 0) {
     return (
@@ -346,35 +380,11 @@ export const MotorCharts: React.FC<MotorChartsProps> = ({ data, autoRefresh = fa
   }
 
   return (
-    <div className="flex flex-col gap-4">
+    <div className="flex flex-col gap-2">
 
-      {/* Controls */}
-      <div className="bg-white p-2 px-4 rounded-lg border border-slate-200 shadow flex flex-wrap items-center justify-between gap-2 sticky top-16 z-40">
-        <div className="flex items-center gap-3">
-          <span className="text-sm font-medium text-slate-600">
-            🔗 Wykresy zsynchronizowane
-          </span>
-          <button
-            onClick={handleResetZoom}
-            className="flex items-center gap-1 px-2 py-1 rounded bg-slate-100 hover:bg-blue-100 hover:text-blue-600 transition-colors text-xs font-medium"
-            title="Reset to last 10 minutes"
-          >
-            <RotateCcw className="h-3 w-3" />
-            10 min
-          </button>
-        </div>
-        <div className="flex items-center gap-2 text-xs">
-          <span className="text-slate-500">{data.length} pts</span>
-          {autoRefresh && (
-            <span className="flex items-center gap-1 text-green-600 font-medium bg-green-50 px-2 py-0.5 rounded">
-              <RefreshCw className="h-3 w-3 animate-spin" style={{ animationDuration: '3s' }} />
-              LIVE
-            </span>
-          )}
-        </div>
-      </div>
 
-      {/* Chart 1: Avg Current & Max Limit */}
+
+      {/* Chart 1: Average Current & Limits */}
       <div className="bg-white p-3 rounded-lg border border-slate-200 shadow-sm relative overflow-hidden">
         <div className="mb-2 flex justify-between items-center">
           <div>
@@ -477,4 +487,4 @@ export const MotorCharts: React.FC<MotorChartsProps> = ({ data, autoRefresh = fa
 
     </div>
   );
-};
+});
