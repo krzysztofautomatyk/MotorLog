@@ -101,14 +101,14 @@ export const generateMotorData = async (
   line: string,
   motorName: string,
   weeks: string[],
-  day: number | 'ALL'
+  days: number[] // Empty array means 'ALL'
 ): Promise<MotorLog[]> => {
   const params = new URLSearchParams({
     zone,
     line,
     motor: motorName,
     weeks: weeks.join(','),
-    day: String(day)
+    day: days.length > 0 ? days.join(',') : 'ALL'
   });
 
   const raw = await fetchJson<any[]>(`/api/motor-logs?${params.toString()}`);

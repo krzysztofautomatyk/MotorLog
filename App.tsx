@@ -40,7 +40,7 @@ const App = () => {
   // Filter State
   const [filters, setFilters] = useState<FilterState>({
     selectedWeeks: [],
-    selectedDay: 'ALL'
+    selectedDays: []
   });
 
   // Chart Data State
@@ -148,7 +148,7 @@ const App = () => {
             selectedLine.name,
             selectedMotor,
             filters.selectedWeeks,
-            filters.selectedDay
+            filters.selectedDays
           );
 
           if (isMounted) {
@@ -252,6 +252,18 @@ const App = () => {
     });
   }, []);
 
+  const handleDayToggle = useCallback((day: number) => {
+    setFilters(prev => {
+      // Toggle logic: if already selected, remove it
+      const newDays = prev.selectedDays.includes(day)
+        ? prev.selectedDays.filter(d => d !== day)
+        : [...prev.selectedDays, day];
+
+      // We can update directly. Empty array means 'ALL' in our logic (or None, but usually treated as ALL in API if filter is optional)
+      return { ...prev, selectedDays: newDays };
+    });
+  }, []);
+
   // Breadcrumbs config
   const breadcrumbs = useMemo(() => {
     const crumbs = [];
@@ -317,7 +329,7 @@ const App = () => {
                   <div className="mt-4 pt-4 border-t border-[var(--border-primary)] flex justify-between text-sm">
                     <span className="text-[var(--text-secondary)]">Status</span>
                     <span className={`font-semibold ${zone.status === 'Healthy' ? 'text-emerald-600' :
-                        zone.status === 'Warning' ? 'text-amber-600' : 'text-rose-600'
+                      zone.status === 'Warning' ? 'text-amber-600' : 'text-rose-600'
                       }`}>{zone.status}</span>
                   </div>
                 </Card>
@@ -447,15 +459,28 @@ const App = () => {
                   </div>
                 </div>
 
-                {/* Day dropdown */}
-                <select
-                  className="px-2 py-1 bg-[var(--bg-card)] border border-[var(--border-primary)] rounded text-xs font-bold text-[var(--text-primary)] cursor-pointer hover:border-[var(--accent-blue)] transition-colors"
-                  value={filters.selectedDay}
-                  onChange={(e) => setFilters({ ...filters, selectedDay: e.target.value === 'ALL' ? 'ALL' : parseInt(e.target.value) })}
-                >
-                  <option value="ALL">All Days</option>
-                  {[1, 2, 3, 4, 5, 6, 7].map(d => <option key={d} value={d}>Day {d}</option>)}
-                </select>
+                {/* Day buttons */}
+                <div className="flex items-center gap-2">
+                  <span className="text-xs text-[var(--text-secondary)] uppercase font-bold tracking-tight">Day (1-7):</span>
+                  <div className="flex gap-1">
+                    {[1, 2, 3, 4, 5, 6, 7].map(d => (
+                      <button
+                        key={d}
+                        onClick={() => handleDayToggle(d)}
+                        className={`w-6 h-6 flex items-center justify-center rounded text-xs font-bold border transition-all ${filters.selectedDays.includes(d)
+                          ? 'bg-emerald-600 text-white border-emerald-600 shadow-md transform scale-105'
+                          : 'bg-[var(--bg-card)] text-[var(--text-secondary)] border-[var(--border-primary)] hover:bg-[var(--bg-tertiary)]'
+                          }`}
+                        title={`Toggle Day ${d}`}
+                      >
+                        {d}
+                      </button>
+                    ))}
+                    {filters.selectedDays.length === 0 && (
+                      <span className="ml-1 text-[10px] text-[var(--text-tertiary)] font-medium uppercase self-center">(All)</span>
+                    )}
+                  </div>
+                </div>
 
                 {/* Auto-refresh checkbox */}
                 <label className="flex items-center gap-2 cursor-pointer bg-[var(--bg-tertiary)] px-2 py-1 rounded border border-[var(--border-primary)] hover:bg-[var(--bg-card)] transition-colors">

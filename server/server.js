@@ -128,7 +128,11 @@ app.get('/api/motor-logs', async (req, res) => {
   if (!zone || !line || !motor) return res.status(400).json({ message: 'zone, line, motor are required' });
 
   const weekList = String(weeks).split(',').map(w => w.trim()).filter(Boolean);
-  const dayNum = day === 'ALL' ? null : Number(day);
+
+  // Support multiple days: "1,3,5" or "ALL"
+  const dayList = (String(day) === 'ALL' || !day)
+    ? []
+    : String(day).split(',').map(d => Number(d.trim())).filter(n => !Number.isNaN(n));
 
   try {
     const pool = await getPool();
@@ -144,9 +148,11 @@ app.get('/api/motor-logs', async (req, res) => {
     }
 
     let dayClause = '';
-    if (dayNum && !Number.isNaN(dayNum)) {
-      dayClause = 'AND DATEPART(WEEKDAY, [Timestamp]) = @day';
-      request.input('day', sql.Int, dayNum);
+    if (dayList.length > 0) {
+      // Use SQL DATEPART(WEEKDAY, ...) which depends on SET DATEFIRST
+      // Assuming SET DATEFIRST 1 is used in query as seen below
+      dayClause = `AND DATEPART(WEEKDAY, [Timestamp]) IN (${dayList.map((_, i) => `@day${i}`).join(',')})`;
+      dayList.forEach((d, i) => request.input(`day${i}`, sql.Int, d));
     }
 
     const result = await request.query(`

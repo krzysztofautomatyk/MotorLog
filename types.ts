@@ -46,7 +46,7 @@ export interface LineData {
 
 export interface FilterState {
   selectedWeeks: string[];
-  selectedDay: number | 'ALL';
+  selectedDays: number[];
 }
 
 export interface AnalyticsSummary {

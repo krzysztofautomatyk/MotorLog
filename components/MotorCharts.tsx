@@ -103,7 +103,10 @@ export const MotorCharts = React.forwardRef<MotorChartsHandle, MotorChartsProps>
   // 2. currentTime updates (every 10 seconds when autoRefresh is ON)
   // 3. autoRefresh is enabled
   useEffect(() => {
-    // Always apply the current time range, even if autoRefresh is OFF (for initial load)
+    // Only apply zoom if autoRefresh is ON.
+    // If OFF, we want to let the user see the full data or zoom manually.
+    if (!autoRefresh) return;
+
     const range = getLast10MinRange;
 
     const applyZoom = () => {
@@ -210,6 +213,20 @@ export const MotorCharts = React.forwardRef<MotorChartsHandle, MotorChartsProps>
     // FORCE the time axis to show CURRENT TIME, not data time
     const timeRange = getLast10MinRange;
 
+    // Only force zoom/axis if autoRefresh is ON
+    const zoomConfig = autoRefresh ? {
+      startValue: timeRange.startValue,
+      endValue: timeRange.endValue
+    } : {
+      start: 0,
+      end: 100
+    };
+
+    const axisConfig = autoRefresh ? {
+      min: timeRange.startValue,
+      max: timeRange.endValue
+    } : {};
+
     return {
       animation: false,
       backgroundColor: 'transparent',
@@ -228,8 +245,7 @@ export const MotorCharts = React.forwardRef<MotorChartsHandle, MotorChartsProps>
           type: 'inside',
           xAxisIndex: 0,
           filterMode: 'none',
-          startValue: timeRange.startValue,
-          endValue: timeRange.endValue
+          ...zoomConfig
         },
         {
           type: 'slider',
@@ -246,8 +262,7 @@ export const MotorCharts = React.forwardRef<MotorChartsHandle, MotorChartsProps>
           textStyle: {
             color: isDark ? '#94a3b8' : '#64748b'
           },
-          startValue: timeRange.startValue,
-          endValue: timeRange.endValue
+          ...zoomConfig
         }
       ],
       toolbox: {
@@ -263,10 +278,7 @@ export const MotorCharts = React.forwardRef<MotorChartsHandle, MotorChartsProps>
         }
       },
       // Return xAxis config separately so each chart can merge it
-      _xAxisTimeRange: {
-        min: timeRange.startValue,
-        max: timeRange.endValue
-      }
+      _xAxisTimeRange: axisConfig
     };
   };
 
@@ -352,7 +364,7 @@ export const MotorCharts = React.forwardRef<MotorChartsHandle, MotorChartsProps>
         }
       ]
     };
-  }, [chartData, getLast10MinRange]);
+  }, [chartData, getLast10MinRange, autoRefresh]);
 
   // Chart 2: Real-time Motor Current
   const chart2Options = useMemo(() => {
@@ -422,7 +434,7 @@ export const MotorCharts = React.forwardRef<MotorChartsHandle, MotorChartsProps>
         }
       ]
     };
-  }, [chartData, getLast10MinRange]);
+  }, [chartData, getLast10MinRange, autoRefresh]);
 
   // Chart 3: ON/OFF Status
   const chart3Options = useMemo(() => {
@@ -494,7 +506,7 @@ export const MotorCharts = React.forwardRef<MotorChartsHandle, MotorChartsProps>
         }
       ]
     };
-  }, [onOffData, getLast10MinRange]);
+  }, [onOffData, getLast10MinRange, autoRefresh]);
 
   if (!data || data.length === 0) {
     return (
