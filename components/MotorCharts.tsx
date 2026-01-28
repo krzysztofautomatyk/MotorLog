@@ -24,6 +24,20 @@ const formatRunningTime = (seconds: number): string => {
 // Group ID for chart synchronization
 const CHART_GROUP = 'motor-charts-group';
 
+const formatTooltipTime = (timestamp: string | number): string => {
+  const date = new Date(timestamp);
+  const formattedTime = date.toLocaleString('pl-PL', {
+    day: '2-digit',
+    month: '2-digit',
+    year: 'numeric',
+    hour: '2-digit',
+    minute: '2-digit',
+    second: '2-digit'
+  });
+  const ms = date.getMilliseconds().toString().padStart(3, '0');
+  return `${formattedTime}.${ms}`;
+};
+
 export const MotorCharts: React.FC<MotorChartsProps> = ({ data, autoRefresh = false }) => {
   const [showOnOffTable, setShowOnOffTable] = useState(false);
 
@@ -181,15 +195,13 @@ export const MotorCharts: React.FC<MotorChartsProps> = ({ data, autoRefresh = fa
         const d = chartData[dataIndex];
         if (!d || d.avgCurrent === null) return '';
 
+        const timeWithMs = formatTooltipTime(d.timestamp);
+
         return `
-          <div style="font-weight: bold; margin-bottom: 8px;">${d.timestamp}</div>
-          <div>Zone: ${d.zone}</div>
-          <div>Line: ${d.line}</div>
-          <div>Motor: ${d.motorName}</div>
+          <div style="font-weight: bold; margin-bottom: 8px;">${timeWithMs}</div>
           <div style="color: #0ea5e9; font-weight: bold;">Avg Current: ${d.avgCurrent?.toFixed(2)} A</div>
           <div style="color: #f43f5e;">Max Limit: ${d.maxLimit.toFixed(2)} A</div>
           <div>Running Time: ${d.runningTime}</div>
-          <div>Status: ${d.isMotorOn === 1 ? 'ON' : 'OFF'}</div>
         `;
       }
     },
@@ -239,7 +251,11 @@ export const MotorCharts: React.FC<MotorChartsProps> = ({ data, autoRefresh = fa
       formatter: (params: any) => {
         if (!params || params.length === 0) return '';
         const p = params[0];
-        return `${new Date(p.value[0]).toLocaleTimeString()}<br/>Current: ${p.value[1]?.toFixed(2)} A`;
+        const timeWithMs = formatTooltipTime(p.value[0]);
+        return `
+          <div style="font-weight: bold; margin-bottom: 8px;">${timeWithMs}</div>
+          <div style="color: #8b5cf6;">Motor Current: ${p.value[1]?.toFixed(2)} A</div>
+        `;
       }
     },
     xAxis: {
@@ -280,7 +296,11 @@ export const MotorCharts: React.FC<MotorChartsProps> = ({ data, autoRefresh = fa
       formatter: (params: any) => {
         if (!params || params.length === 0) return '';
         const p = params[0];
-        return `${new Date(p.value[0]).toLocaleTimeString()}<br/>Status: ${p.value[1] === 1 ? 'ON' : 'OFF'}`;
+        const timeWithMs = formatTooltipTime(p.value[0]);
+        return `
+          <div style="font-weight: bold; margin-bottom: 8px;">${timeWithMs}</div>
+          <div style="color: #10b981;">Status: ${p.value[1] === 1 ? 'ON' : 'OFF'}</div>
+        `;
       }
     },
     xAxis: {
