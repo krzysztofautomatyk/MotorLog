@@ -24,19 +24,61 @@ const formatRunningTime = (seconds: number): string => {
 // Group ID for chart synchronization
 const CHART_GROUP = 'motor-charts-group';
 
+// Parse timestamp string as "naive" - returns UTC ms where UTC values match the DB string
+// This ensures we display exactly what's in the database
+const parseNaiveTimestamp = (timestamp: string | number): number => {
+  if (typeof timestamp === 'number') return timestamp;
+  if (!timestamp) return Date.now();
+  
+  // Handle format: "2024-01-28 14:30:00.000" or "2024-01-28T14:30:00.000"
+  const normalized = String(timestamp).replace(' ', 'T').replace(/Z$/, '');
+  
+  const match = normalized.match(/^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2}):(\d{2})(?:\.(\d{1,3}))?/);
+  if (match) {
+    const [, year, month, day, hours, minutes, seconds, ms = '0'] = match;
+    return Date.UTC(
+      parseInt(year),
+      parseInt(month) - 1,
+      parseInt(day),
+      parseInt(hours),
+      parseInt(minutes),
+      parseInt(seconds),
+      parseInt(ms.padEnd(3, '0'))
+    );
+  }
+  
+  return new Date(normalized).getTime();
+};
+
+// Format timestamp for tooltip - displays using UTC to show exact database value
 const formatTooltipTime = (timestamp: string | number): string => {
-  const date = new Date(timestamp);
-  const formattedTime = date.toLocaleString('en-US', {
-    day: '2-digit',
-    month: '2-digit',
-    year: 'numeric',
-    hour: '2-digit',
-    minute: '2-digit',
-    second: '2-digit',
-    hour12: false
-  });
-  const ms = date.getMilliseconds().toString().padStart(3, '0');
-  return `${formattedTime}.${ms}`;
+  const ms = typeof timestamp === 'number' ? timestamp : parseNaiveTimestamp(timestamp);
+  const date = new Date(ms);
+  
+  // Use UTC methods to display the exact value from the database
+  const day = String(date.getUTCDate()).padStart(2, '0');
+  const month = String(date.getUTCMonth() + 1).padStart(2, '0');
+  const year = date.getUTCFullYear();
+  const hours = String(date.getUTCHours()).padStart(2, '0');
+  const minutes = String(date.getUTCMinutes()).padStart(2, '0');
+  const seconds = String(date.getUTCSeconds()).padStart(2, '0');
+  const milliseconds = String(date.getUTCMilliseconds()).padStart(3, '0');
+  
+  return `${day}/${month}/${year}, ${hours}:${minutes}:${seconds}.${milliseconds}`;
+};
+
+// Format timestamp for table display - exact database value
+const formatTableTimestamp = (timestampMs: number): string => {
+  const date = new Date(timestampMs);
+  const year = date.getUTCFullYear();
+  const month = String(date.getUTCMonth() + 1).padStart(2, '0');
+  const day = String(date.getUTCDate()).padStart(2, '0');
+  const hours = String(date.getUTCHours()).padStart(2, '0');
+  const minutes = String(date.getUTCMinutes()).padStart(2, '0');
+  const seconds = String(date.getUTCSeconds()).padStart(2, '0');
+  const ms = String(date.getUTCMilliseconds()).padStart(3, '0');
+  
+  return `${year}-${month}-${day} ${hours}:${minutes}:${seconds}.${ms}`;
 };
 
 export interface MotorChartsHandle {
@@ -167,7 +209,7 @@ export const MotorCharts = React.forwardRef<MotorChartsHandle, MotorChartsProps>
   const chartData = useMemo(() => {
     return data.map(d => ({
       timestamp: d.timestamp,
-      timestampMs: new Date(d.timestamp).getTime(),
+      timestampMs: d.timestampObj, // Use pre-parsed naive timestamp
       avgCurrent: d.avgCurrent > 0 ? d.avgCurrent : null,
       maxLimit: d.maxCurrentLimit,
       motorCurrent: d.motorCurrent,
@@ -194,7 +236,7 @@ export const MotorCharts = React.forwardRef<MotorChartsHandle, MotorChartsProps>
 
       if (lastState === null || current.isMotorOn !== lastState || current.timestamp !== lastTs) {
         result.push({
-          timestampMs: new Date(current.timestamp).getTime(),
+          timestampMs: current.timestampObj, // Use pre-parsed naive timestamp
           value: current.isMotorOn,
           label: current.isMotorOn === 1 ? 'ON' : 'OFF'
         });
@@ -230,6 +272,7 @@ export const MotorCharts = React.forwardRef<MotorChartsHandle, MotorChartsProps>
     return {
       animation: false,
       backgroundColor: 'transparent',
+      useUTC: true, // CRITICAL: Tell ECharts to use UTC for time display
       textStyle: {
         color: isDark ? '#cbd5e1' : '#475569'
       },
@@ -599,7 +642,7 @@ export const MotorCharts = React.forwardRef<MotorChartsHandle, MotorChartsProps>
               <tbody>
                 {onOffData.map((row, idx) => (
                   <tr key={idx} className={`border-b border-[var(--border-primary)] hover:bg-[var(--bg-tertiary)] ${row.value === 1 ? 'bg-emerald-50/30 dark:bg-emerald-900/10' : ''}`}>
-                    <td className="px-4 py-1 font-mono text-xs text-[var(--text-secondary)]">{new Date(row.timestampMs).toISOString()}</td>
+                    <td className="px-4 py-1 font-mono text-xs text-[var(--text-secondary)]">{formatTableTimestamp(row.timestampMs)}</td>
                     <td className="px-4 py-1 font-mono font-bold text-[var(--text-primary)]">{row.value}</td>
                     <td className="px-4 py-1">
                       <span className={`text-xs font-bold px-2 py-0.5 rounded ${row.value === 1 ? 'bg-emerald-100 text-emerald-700 dark:bg-emerald-900/40 dark:text-emerald-400' : 'bg-red-100 text-red-700 dark:bg-red-900/40 dark:text-red-400'}`}>

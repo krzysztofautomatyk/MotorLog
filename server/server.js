@@ -159,7 +159,8 @@ app.get('/api/motor-logs', async (req, res) => {
       SET DATEFIRST 1;
       SELECT TOP (5000)
         [Id],
-        [Timestamp],
+        -- Return timestamp as raw string to avoid timezone conversion by mssql driver
+        FORMAT([Timestamp], 'yyyy-MM-dd HH:mm:ss.fff') AS [Timestamp],
         [MotorName],
         [Zone],
         [Line],

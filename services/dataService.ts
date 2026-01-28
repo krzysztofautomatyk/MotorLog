@@ -16,16 +16,45 @@ const toNumber = (val: unknown, fallback = 0) => {
   return fallback;
 };
 
+// Parse timestamp as "naive" (no timezone) - treats the DB value as if it were UTC
+// This ensures the exact database value is displayed, without local timezone conversion
+const parseNaiveTimestamp = (timestamp: string): number => {
+  if (!timestamp) return Date.now();
+  
+  // Handle format: "2024-01-28 14:30:00.000" or "2024-01-28T14:30:00.000"
+  const normalized = timestamp.replace(' ', 'T').replace(/Z$/, '');
+  
+  // Parse manually to create UTC date (so getUTCHours returns exact DB value)
+  const match = normalized.match(/^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2}):(\d{2})(?:\.(\d{1,3}))?/);
+  if (match) {
+    const [, year, month, day, hours, minutes, seconds, ms = '0'] = match;
+    return Date.UTC(
+      parseInt(year),
+      parseInt(month) - 1, // JS months are 0-indexed
+      parseInt(day),
+      parseInt(hours),
+      parseInt(minutes),
+      parseInt(seconds),
+      parseInt(ms.padEnd(3, '0'))
+    );
+  }
+  
+  // Fallback: parse as local (old behavior)
+  return new Date(normalized).getTime();
+};
+
 const normalizeMotorLog = (raw: any): MotorLog => {
   const timestamp = raw.Timestamp || raw.timestamp;
-  const dateStr = timestamp?.replace(' ', 'T');
-  const dateObj = dateStr ? new Date(dateStr) : new Date();
-  const day = dateObj.getDay() === 0 ? 7 : dateObj.getDay();
+  const timestampMs = parseNaiveTimestamp(timestamp);
+  // Get day of week from the naive timestamp (using UTC to match the DB value)
+  const dateObj = new Date(timestampMs);
+  const utcDay = dateObj.getUTCDay();
+  const day = utcDay === 0 ? 7 : utcDay; // Convert Sunday (0) to 7
 
   return {
     id: Number(raw.Id ?? raw.id),
     timestamp,
-    timestampObj: dateObj.getTime(),
+    timestampObj: timestampMs,
     motorName: raw.MotorName || raw.motorName,
     zone: raw.Zone || raw.zone,
     line: raw.Line || raw.line,
