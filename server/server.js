@@ -157,7 +157,7 @@ app.get('/api/motor-logs', async (req, res) => {
 
     const result = await request.query(`
       SET DATEFIRST 1;
-      SELECT TOP (5000)
+      SELECT TOP (50000)
         [Id],
         -- Return timestamp as raw string to avoid timezone conversion by mssql driver
         FORMAT([Timestamp], 'yyyy-MM-dd HH:mm:ss.fff') AS [Timestamp],

@@ -81,6 +81,21 @@ const formatTableTimestamp = (timestampMs: number): string => {
   return `${year}-${month}-${day} ${hours}:${minutes}:${seconds}.${ms}`;
 };
 
+// Get current local time as "naive UTC" (local time values stored as UTC)
+// This matches our data format where database local times are stored as UTC
+const getNowAsNaiveUTC = (): number => {
+  const now = new Date();
+  return Date.UTC(
+    now.getFullYear(),
+    now.getMonth(),
+    now.getDate(),
+    now.getHours(),
+    now.getMinutes(),
+    now.getSeconds(),
+    now.getMilliseconds()
+  );
+};
+
 export interface MotorChartsHandle {
   resetZoom: () => void;
 }
@@ -119,14 +134,14 @@ export const MotorCharts = React.forwardRef<MotorChartsHandle, MotorChartsProps>
 
   // Calculate 10-minute window based on CURRENT TIME (not last data timestamp)
   // This ensures we always see the "live" window, even if data is old
-  const [currentTime, setCurrentTime] = useState(Date.now());
+  const [currentTime, setCurrentTime] = useState(getNowAsNaiveUTC());
 
   // Update current time every 10 seconds (synced with auto-refresh)
   useEffect(() => {
     if (!autoRefresh) return;
 
     const interval = setInterval(() => {
-      setCurrentTime(Date.now());
+      setCurrentTime(getNowAsNaiveUTC());
     }, 10000);
 
     return () => clearInterval(interval);
@@ -177,7 +192,7 @@ export const MotorCharts = React.forwardRef<MotorChartsHandle, MotorChartsProps>
   // Manual reset zoom to last 10 minutes (from NOW)
   const handleResetZoom = () => {
     // Update current time to NOW when manually resetting
-    const now = Date.now();
+    const now = getNowAsNaiveUTC();
     setCurrentTime(now);
 
     const tenMinutes = 10 * 60 * 1000;
