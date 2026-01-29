@@ -120,7 +120,8 @@ const App = () => {
     };
   }, []);
 
-  // Auto-refresh state with checkbox toggle
+  // Modes: MANUAL (week/day + load) or AUTO (10s last 10 minutes)
+  const [mode, setMode] = useState<'MANUAL' | 'AUTO'>('MANUAL');
   const [autoRefresh, setAutoRefresh] = useState(false);
   const [refreshCounter, setRefreshCounter] = useState(0);
   const [loadNonce, setLoadNonce] = useState(0);
@@ -139,7 +140,9 @@ const App = () => {
   useEffect(() => {
     let isMounted = true;
 
-    if (selectedZone && selectedLine && selectedMotor && filters.selectedDays.length > 0 && loadNonce > 0) {
+    const isAutoMode = mode === 'AUTO';
+
+    if (selectedZone && selectedLine && selectedMotor && ((isAutoMode && loadNonce > 0) || (!isAutoMode && filters.selectedDays.length > 0 && loadNonce > 0))) {
       // Show loading only for initial load, not for auto-refresh updates
       const isAutoRefreshUpdate = autoRefresh && refreshCounter > 0;
       if (!isAutoRefreshUpdate) {
@@ -150,7 +153,7 @@ const App = () => {
         try {
           let data: MotorLog[];
 
-          if (autoRefresh) {
+          if (isAutoMode) {
             // Use lightweight endpoint for auto-refresh mode (last 15 minutes)
             data = await getLatestMotorData(
               selectedZone.name,
@@ -192,7 +195,7 @@ const App = () => {
     return () => {
       isMounted = false;
     };
-  }, [selectedZone, selectedLine, selectedMotor, filters, refreshCounter, autoRefresh, loadNonce]);
+  }, [selectedZone, selectedLine, selectedMotor, filters, refreshCounter, autoRefresh, loadNonce, mode]);
 
   // Get last timestamp from data for age indicator
   const lastDataTimestamp = useMemo(() => {
@@ -246,6 +249,8 @@ const App = () => {
     setChartData([]);
     setError(null);
     setLoadNonce(0);
+    setMode('MANUAL');
+    setAutoRefresh(false);
   }, []);
 
   const resetToLines = useCallback(() => {
@@ -255,6 +260,8 @@ const App = () => {
       setSelectedMotor(null);
       setChartData([]);
       setLoadNonce(0);
+      setMode('MANUAL');
+      setAutoRefresh(false);
     }
   }, [selectedZone]);
 
@@ -295,6 +302,20 @@ const App = () => {
     setLoading(prev => ({ ...prev, chartData: true }));
     setLoadNonce(n => n + 1);
   }, [filters.selectedDays.length, selectedLine, selectedMotor, selectedZone]);
+
+  const handleModeChange = useCallback((nextMode: 'MANUAL' | 'AUTO') => {
+    setMode(nextMode);
+    setRefreshCounter(0);
+    if (nextMode === 'AUTO') {
+      setAutoRefresh(true);
+      setLoadNonce(n => (n === 0 ? 1 : n + 1));
+      setError(null);
+    } else {
+      setAutoRefresh(false);
+      setLoadNonce(0);
+      setChartData([]);
+    }
+  }, []);
 
   // Breadcrumbs config
   const breadcrumbs = useMemo(() => {
@@ -436,42 +457,49 @@ const App = () => {
                 </div>
               </div>
 
-              {/* Middle: Linked Charts Indicator & 10m Reset + LIVE status + Data Age */}
+              {/* Middle: Status + Data age */}
               <div className="flex items-center gap-3">
-                <div className="flex items-center gap-2 bg-blue-50/50 dark:bg-blue-900/20 px-3 py-1 rounded-full border border-blue-100 dark:border-blue-800">
-                  <div className="flex items-center gap-1.5 text-xs font-semibold text-blue-700 dark:text-blue-300">
-                    <Layers className="h-3.5 w-3.5" />
-                    <span>Synchronized</span>
-                  </div>
-                  <button
-                    onClick={() => chartsRef.current?.resetZoom()}
-                    className="flex items-center gap-1 px-2 py-0.5 rounded bg-[var(--bg-card)] border border-blue-200 dark:border-blue-700 hover:bg-blue-600 hover:text-white hover:border-blue-600 transition-all text-[10px] uppercase tracking-wider font-bold shadow-sm"
-                    title="Reset view to last 10 minutes of data"
-                  >
-                    <RotateCcw className="h-2.5 w-2.5" />
-                    10 Min
-                  </button>
-                </div>
+                <span className="text-[10px] font-bold text-[var(--text-tertiary)] uppercase tracking-widest">
+                  {loading.chartData ? '...' : `${chartData.length} pts`}
+                </span>
 
-                <div className="flex items-center gap-3 ml-2">
-                  <span className="text-[10px] font-bold text-[var(--text-tertiary)] uppercase tracking-widest">
-                    {loading.chartData ? '...' : `${chartData.length} pts`}
+                {/* Data Age Indicator */}
+                <DataAgeIndicator lastTimestamp={lastDataTimestamp} autoRefresh={autoRefresh} />
+
+                {autoRefresh && (
+                  <span className="flex items-center gap-1 text-emerald-600 dark:text-emerald-400 font-bold bg-emerald-50 dark:bg-emerald-900/30 px-2 py-0.5 rounded border border-emerald-100 dark:border-emerald-800 text-[10px] live-indicator">
+                    <RefreshCw className="h-2.5 w-2.5 animate-spin" style={{ animationDuration: '3s' }} />
+                    LIVE 10m
                   </span>
-
-                  {/* Data Age Indicator */}
-                  <DataAgeIndicator lastTimestamp={lastDataTimestamp} autoRefresh={autoRefresh} />
-
-                  {autoRefresh && (
-                    <span className="flex items-center gap-1 text-emerald-600 dark:text-emerald-400 font-bold bg-emerald-50 dark:bg-emerald-900/30 px-2 py-0.5 rounded border border-emerald-100 dark:border-emerald-800 text-[10px] live-indicator">
-                      <RefreshCw className="h-2.5 w-2.5 animate-spin" style={{ animationDuration: '3s' }} />
-                      LIVE
-                    </span>
-                  )}
-                </div>
+                )}
               </div>
 
               {/* Right: Filters + Auto-refresh checkbox */}
               <div className="flex items-center gap-4">
+                {/* Mode toggle */}
+                <div className="flex items-center gap-1 bg-[var(--bg-tertiary)] px-2 py-1 rounded border border-[var(--border-primary)]">
+                  <button
+                    onClick={() => handleModeChange('MANUAL')}
+                    className={`px-2 py-1 rounded text-xs font-bold ${mode === 'MANUAL'
+                      ? 'bg-[var(--bg-card)] text-[var(--text-primary)] border border-[var(--border-primary)] shadow-sm'
+                      : 'text-[var(--text-tertiary)] hover:text-[var(--text-secondary)]'
+                      }`}
+                    title="Tryb: wybór tygodnia i dnia/dni + ręczne ładowanie"
+                  >
+                    Manual
+                  </button>
+                  <button
+                    onClick={() => handleModeChange('AUTO')}
+                    className={`px-2 py-1 rounded text-xs font-bold ${mode === 'AUTO'
+                      ? 'bg-blue-600 text-white border border-blue-600 shadow-sm'
+                      : 'text-[var(--text-tertiary)] hover:text-[var(--text-secondary)]'
+                      }`}
+                    title="Tryb: Auto 10s, ostatnie 10 minut"
+                  >
+                    Auto 10s
+                  </button>
+                </div>
+
                 {/* Week buttons */}
                 <div className="flex items-center gap-2">
                   <span className="text-xs text-[var(--text-secondary)] uppercase font-bold tracking-tight">Week:</span>
@@ -479,11 +507,14 @@ const App = () => {
                     {allWeeks.map(w => (
                       <button
                         key={w}
-                        onClick={() => handleWeekToggle(w)}
-                        className={`px-2 py-1 rounded text-xs font-bold border transition-all ${filters.selectedWeeks.includes(w)
-                          ? 'bg-blue-600 text-white border-blue-600 shadow-md transform scale-105'
-                          : 'bg-[var(--bg-card)] text-[var(--text-secondary)] border-[var(--border-primary)] hover:bg-[var(--bg-tertiary)]'
+                        onClick={() => mode === 'MANUAL' && handleWeekToggle(w)}
+                        className={`px-2 py-1 rounded text-xs font-bold border transition-all ${mode !== 'MANUAL'
+                          ? 'cursor-not-allowed opacity-60 bg-[var(--bg-tertiary)] border-[var(--border-primary)]'
+                          : filters.selectedWeeks.includes(w)
+                            ? 'bg-blue-600 text-white border-blue-600 shadow-md transform scale-105'
+                            : 'bg-[var(--bg-card)] text-[var(--text-secondary)] border-[var(--border-primary)] hover:bg-[var(--bg-tertiary)]'
                           }`}
+                        disabled={mode !== 'MANUAL'}
                       >
                         {w}
                       </button>
@@ -498,47 +529,40 @@ const App = () => {
                     {[1, 2, 3, 4, 5, 6, 7].map(d => (
                       <button
                         key={d}
-                        onClick={() => handleDayToggle(d)}
-                        className={`w-6 h-6 flex items-center justify-center rounded text-xs font-bold border transition-all ${filters.selectedDays.includes(d)
-                          ? 'bg-emerald-600 text-white border-emerald-600 shadow-md transform scale-105'
-                          : 'bg-[var(--bg-card)] text-[var(--text-secondary)] border-[var(--border-primary)] hover:bg-[var(--bg-tertiary)]'
+                        onClick={() => mode === 'MANUAL' && handleDayToggle(d)}
+                        className={`w-6 h-6 flex items-center justify-center rounded text-xs font-bold border transition-all ${mode !== 'MANUAL'
+                          ? 'cursor-not-allowed opacity-60 bg-[var(--bg-tertiary)] border-[var(--border-primary)]'
+                          : filters.selectedDays.includes(d)
+                            ? 'bg-emerald-600 text-white border-emerald-600 shadow-md transform scale-105'
+                            : 'bg-[var(--bg-card)] text-[var(--text-secondary)] border-[var(--border-primary)] hover:bg-[var(--bg-tertiary)]'
                           }`}
+                        disabled={mode !== 'MANUAL'}
                         title={`Toggle Day ${d}`}
                       >
                         {d}
                       </button>
                     ))}
                     {filters.selectedDays.length === 0 && (
-                      <span className="ml-1 text-[10px] text-[var(--text-tertiary)] font-medium uppercase self-center">(wymagany wybór)</span>
+                      <span className="ml-1 text-[10px] text-[var(--text-tertiary)] font-medium uppercase self-center">{mode === 'MANUAL' ? '(wymagany wybór)' : '(auto)'}</span>
                     )}
                   </div>
                 </div>
 
-                {/* Load button */}
-                <button
-                  onClick={handleLoadData}
-                  className={`flex items-center gap-2 px-3 py-2 rounded border font-bold text-xs transition-colors ${filters.selectedDays.length === 0
-                    ? 'bg-[var(--bg-tertiary)] text-[var(--text-tertiary)] border-[var(--border-primary)] cursor-not-allowed'
-                    : 'bg-blue-600 text-white border-blue-600 hover:bg-blue-700 shadow-sm'
-                    }`}
-                  disabled={filters.selectedDays.length === 0 || loading.chartData}
-                  title="Załaduj dane dla wybranych dni"
-                >
-                  <RefreshCw className="h-3.5 w-3.5" />
-                  {loading.chartData ? 'Ładowanie...' : 'Ładuj dane'}
-                </button>
-
-                {/* Auto-refresh checkbox */}
-                <label className="flex items-center gap-2 cursor-pointer bg-[var(--bg-tertiary)] px-2 py-1 rounded border border-[var(--border-primary)] hover:bg-[var(--bg-card)] transition-colors">
-                  <input
-                    type="checkbox"
-                    checked={autoRefresh}
-                    onChange={(e) => setAutoRefresh(e.target.checked)}
-                    className="w-4 h-4 text-blue-600 rounded focus:ring-blue-500 accent-blue-600"
-                    disabled={loadNonce === 0}
-                  />
-                  <span className="text-xs font-bold text-[var(--text-secondary)] uppercase tracking-tighter">Auto 10s</span>
-                </label>
+                {/* Load button (manual only) */}
+                {mode === 'MANUAL' && (
+                  <button
+                    onClick={handleLoadData}
+                    className={`flex items-center gap-2 px-3 py-2 rounded border font-bold text-xs transition-colors ${filters.selectedDays.length === 0
+                      ? 'bg-[var(--bg-tertiary)] text-[var(--text-tertiary)] border-[var(--border-primary)] cursor-not-allowed'
+                      : 'bg-blue-600 text-white border-blue-600 hover:bg-blue-700 shadow-sm'
+                      }`}
+                    disabled={filters.selectedDays.length === 0 || loading.chartData}
+                    title="Załaduj dane dla wybranych dni"
+                  >
+                    <RefreshCw className="h-3.5 w-3.5" />
+                    {loading.chartData ? 'Ładowanie...' : 'Ładuj dane'}
+                  </button>
+                )}
               </div>
             </div>
           )}
