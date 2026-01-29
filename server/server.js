@@ -36,6 +36,38 @@ const getPool = async () => {
   return poolPromise;
 };
 
+// Lightweight metadata cache (zones/lines/motors/weeks) to avoid repeated aggregates
+const metadataCache = new Map();
+const inFlight = new Map();
+const TTL = {
+  zones: Number(process.env.METADATA_TTL_ZONES_MS || 60_000),
+  lines: Number(process.env.METADATA_TTL_LINES_MS || 30_000),
+  motors: Number(process.env.METADATA_TTL_MOTORS_MS || 30_000),
+  weeks: Number(process.env.METADATA_TTL_WEEKS_MS || 300_000)
+};
+
+const getCached = async (key, ttl, fetcher) => {
+  const now = Date.now();
+  const hit = metadataCache.get(key);
+  if (hit && hit.expires > now) return hit.value;
+
+  // Deduplicate concurrent fetches for same key
+  if (inFlight.has(key)) return inFlight.get(key);
+
+  const promise = (async () => {
+    try {
+      const value = await fetcher();
+      metadataCache.set(key, { value, expires: now + ttl });
+      return value;
+    } finally {
+      inFlight.delete(key);
+    }
+  })();
+
+  inFlight.set(key, promise);
+  return promise;
+};
+
 app.get('/api/health', async (_req, res) => {
   try {
     const pool = await getPool();
@@ -48,18 +80,22 @@ app.get('/api/health', async (_req, res) => {
 
 app.get('/api/zones', async (_req, res) => {
   try {
-    const pool = await getPool();
-    const result = await pool.request().query(`
-      SELECT 
-        Zone AS name,
-        COUNT(DISTINCT Line) AS lineCount,
-        COUNT(DISTINCT MotorName) AS motorCount
-      FROM dbo.MotorLogs
-      WHERE Zone IS NOT NULL
-      GROUP BY Zone
-      ORDER BY Zone;
-    `);
-    res.json(result.recordset.map(r => ({ ...r, status: 'Healthy' })));
+    const zones = await getCached('zones', TTL.zones, async () => {
+      const pool = await getPool();
+      const result = await pool.request().query(`
+        SELECT 
+          Zone AS name,
+          COUNT(DISTINCT Line) AS lineCount,
+          COUNT(DISTINCT MotorName) AS motorCount
+        FROM dbo.MotorLogs
+        WHERE Zone IS NOT NULL
+        GROUP BY Zone
+        ORDER BY Zone;
+      `);
+      return result.recordset.map(r => ({ ...r, status: 'Healthy' }));
+    });
+
+    res.json(zones);
   } catch (err) {
     res.status(500).json({ message: err.message });
   }
@@ -69,20 +105,24 @@ app.get('/api/lines', async (req, res) => {
   const zone = req.query.zone;
   if (!zone) return res.status(400).json({ message: 'zone is required' });
   try {
-    const pool = await getPool();
-    const request = pool.request();
-    request.input('zone', sql.NVarChar, zone);
-    const result = await request.query(`
-      SELECT 
-        Line AS name,
-        @zone AS zone,
-        COUNT(DISTINCT MotorName) AS motorCount
-      FROM dbo.MotorLogs
-      WHERE Zone = @zone AND Line IS NOT NULL
-      GROUP BY Line
-      ORDER BY Line;
-    `);
-    res.json(result.recordset);
+    const lines = await getCached(`lines:${zone}`, TTL.lines, async () => {
+      const pool = await getPool();
+      const request = pool.request();
+      request.input('zone', sql.NVarChar, zone);
+      const result = await request.query(`
+        SELECT 
+          Line AS name,
+          @zone AS zone,
+          COUNT(DISTINCT MotorName) AS motorCount
+        FROM dbo.MotorLogs
+        WHERE Zone = @zone AND Line IS NOT NULL
+        GROUP BY Line
+        ORDER BY Line;
+      `);
+      return result.recordset;
+    });
+
+    res.json(lines);
   } catch (err) {
     res.status(500).json({ message: err.message });
   }
@@ -92,17 +132,21 @@ app.get('/api/motors', async (req, res) => {
   const { zone, line } = req.query;
   if (!zone || !line) return res.status(400).json({ message: 'zone and line are required' });
   try {
-    const pool = await getPool();
-    const request = pool.request();
-    request.input('zone', sql.NVarChar, zone);
-    request.input('line', sql.NVarChar, line);
-    const result = await request.query(`
-      SELECT DISTINCT MotorName
-      FROM dbo.MotorLogs
-      WHERE Zone = @zone AND Line = @line AND MotorName IS NOT NULL
-      ORDER BY MotorName;
-    `);
-    res.json(result.recordset.map(r => r.MotorName));
+    const motors = await getCached(`motors:${zone}:${line}`, TTL.motors, async () => {
+      const pool = await getPool();
+      const request = pool.request();
+      request.input('zone', sql.NVarChar, zone);
+      request.input('line', sql.NVarChar, line);
+      const result = await request.query(`
+        SELECT DISTINCT MotorName
+        FROM dbo.MotorLogs
+        WHERE Zone = @zone AND Line = @line AND MotorName IS NOT NULL
+        ORDER BY MotorName;
+      `);
+      return result.recordset.map(r => r.MotorName);
+    });
+
+    res.json(motors);
   } catch (err) {
     res.status(500).json({ message: err.message });
   }
@@ -110,14 +154,18 @@ app.get('/api/motors', async (req, res) => {
 
 app.get('/api/weeks', async (_req, res) => {
   try {
-    const pool = await getPool();
-    const result = await pool.request().query(`
-      SELECT DISTINCT ProductionWeek
-      FROM dbo.MotorLogs
-      WHERE ProductionWeek IS NOT NULL
-      ORDER BY ProductionWeek;
-    `);
-    res.json(result.recordset.map(r => r.ProductionWeek));
+    const weeks = await getCached('weeks', TTL.weeks, async () => {
+      const pool = await getPool();
+      const result = await pool.request().query(`
+        SELECT DISTINCT ProductionWeek
+        FROM dbo.MotorLogs
+        WHERE ProductionWeek IS NOT NULL
+        ORDER BY ProductionWeek;
+      `);
+      return result.recordset.map(r => r.ProductionWeek);
+    });
+
+    res.json(weeks);
   } catch (err) {
     res.status(500).json({ message: err.message });
   }
