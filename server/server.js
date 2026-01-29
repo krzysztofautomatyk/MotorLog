@@ -82,13 +82,13 @@ app.get('/api/zones', async (_req, res) => {
   try {
     const zones = await getCached('zones', TTL.zones, async () => {
       const pool = await getPool();
+      // FAST: Use Indexed View V_MotorHierarchy
       const result = await pool.request().query(`
         SELECT 
           Zone AS name,
           COUNT(DISTINCT Line) AS lineCount,
           COUNT(DISTINCT MotorName) AS motorCount
-        FROM dbo.MotorLogs
-        WHERE Zone IS NOT NULL
+        FROM dbo.V_MotorHierarchy WITH (NOEXPAND)
         GROUP BY Zone
         ORDER BY Zone;
       `);
@@ -109,13 +109,14 @@ app.get('/api/lines', async (req, res) => {
       const pool = await getPool();
       const request = pool.request();
       request.input('zone', sql.NVarChar, zone);
+      // FAST: Use Indexed View V_MotorHierarchy
       const result = await request.query(`
         SELECT 
           Line AS name,
           @zone AS zone,
           COUNT(DISTINCT MotorName) AS motorCount
-        FROM dbo.MotorLogs
-        WHERE Zone = @zone AND Line IS NOT NULL
+        FROM dbo.V_MotorHierarchy WITH (NOEXPAND)
+        WHERE Zone = @zone
         GROUP BY Line
         ORDER BY Line;
       `);
@@ -137,10 +138,11 @@ app.get('/api/motors', async (req, res) => {
       const request = pool.request();
       request.input('zone', sql.NVarChar, zone);
       request.input('line', sql.NVarChar, line);
+      // FAST: Use Indexed View V_MotorHierarchy
       const result = await request.query(`
-        SELECT DISTINCT MotorName
-        FROM dbo.MotorLogs
-        WHERE Zone = @zone AND Line = @line AND MotorName IS NOT NULL
+        SELECT MotorName
+        FROM dbo.V_MotorHierarchy WITH (NOEXPAND)
+        WHERE Zone = @zone AND Line = @line
         ORDER BY MotorName;
       `);
       return result.recordset.map(r => r.MotorName);
@@ -172,15 +174,15 @@ app.get('/api/weeks', async (_req, res) => {
 });
 
 app.get('/api/motor-logs', async (req, res) => {
-  const { zone, line, motor, weeks = '', day = 'ALL' } = req.query;
+  const { zone, line, motor, weeks = '', day = 'ALL', limit = '5000' } = req.query;
   if (!zone || !line || !motor) return res.status(400).json({ message: 'zone, line, motor are required' });
 
   const weekList = String(weeks).split(',').map(w => w.trim()).filter(Boolean);
-
-  // Support multiple days: "1,3,5" or "ALL"
   const dayList = (String(day) === 'ALL' || !day)
     ? []
     : String(day).split(',').map(d => Number(d.trim())).filter(n => !Number.isNaN(n));
+
+  const targetPoints = Math.max(100, Math.min(Number(limit) || 5000, 20000));
 
   try {
     const pool = await getPool();
@@ -197,17 +199,141 @@ app.get('/api/motor-logs', async (req, res) => {
 
     let dayClause = '';
     if (dayList.length > 0) {
-      // Use SQL DATEPART(WEEKDAY, ...) which depends on SET DATEFIRST
-      // Assuming SET DATEFIRST 1 is used in query as seen below
       dayClause = `AND DATEPART(WEEKDAY, [Timestamp]) IN (${dayList.map((_, i) => `@day${i}`).join(',')})`;
       dayList.forEach((d, i) => request.input(`day${i}`, sql.Int, d));
     }
 
-    const result = await request.query(`
+    // Smart Sampling Query (LTTB-lite):
+    // 1. Always include State Changes (IsMotorOn transitions) to keep step charts perfect.
+    // 2. Divide time into buckets and pick Min/Max current to keep spikes visible.
+
+    // Using dynamic SQL construction for the sampling part
+    // If TotalCount <= limit, we return everything (fast path).
+    // If > limit, we execute the smart sampling.
+
+    // We used to use a simple CTE with RowNum % Step, but that loses peaks and state changes.
+    // New strategy:
+    // A) Calculate Bucket Size (TotalDuration / Limit)
+    // B) Group by Bucket
+    // C) Select MAX(Current) per bucket, MIN(Current) per bucket
+    // D) Select ALL rows where IsMotorOn changes
+
+    // Smart Sampling Query (LTTB-lite):
+    // REWRITE: Using Temp Table because CTEs cannot be reused across multiple statements (Count, then Limits, then Selection).
+
+    const query = `
       SET DATEFIRST 1;
-      SELECT TOP (50000)
+      
+      -- 1. Create Temp Table to hold filtered data (avoid re-running complex filter matches)
+      CREATE TABLE #FilteredData (
+        [Id] BIGINT PRIMARY KEY,
+        [Timestamp] DATETIME2,
+        [MotorName] NVARCHAR(255),
+        [Zone] NVARCHAR(255),
+        [Line] NVARCHAR(255),
+        [ProductionWeek] NVARCHAR(50),
+        [MaxCurrentLimit] FLOAT,
+        [MotorCurrent] FLOAT,
+        [IsMotorOn] BIT,
+        [AvgCurrent] FLOAT,
+        [RunningTime] FLOAT,
+        [PrevState] INT -- Stores previous IsMotorOn for state change detection
+      );
+
+      -- 2. Populate Temp Table
+      INSERT INTO #FilteredData
+      SELECT 
+          [Id],
+          [Timestamp],
+          [MotorName],
+          [Zone],
+          [Line],
+          [ProductionWeek],
+          [MaxCurrentLimit],
+          [MotorCurrent],
+          [IsMotorOn],
+          [AvgCurrent],
+          [RunningTime],
+          LAG([IsMotorOn], 1, -1) OVER (ORDER BY [Timestamp])
+      FROM [dbo].[MotorLogs]
+      WHERE [MotorName] = @motor
+        AND [Zone] = @zone
+        AND [Line] = @line
+        ${weekClause}
+        ${dayClause};
+
+      -- 3. Check Count
+      DECLARE @TotalCount INT;
+      SELECT @TotalCount = COUNT(*) FROM #FilteredData;
+      
+      -- Fast Path
+      IF @TotalCount <= ${targetPoints}
+      BEGIN
+         SELECT 
+            [Id],
+            FORMAT([Timestamp], 'yyyy-MM-dd HH:mm:ss.fff') AS [Timestamp],
+            [MotorName],
+            [Zone],
+            [Line],
+            [ProductionWeek],
+            [MaxCurrentLimit],
+            [MotorCurrent],
+            [IsMotorOn],
+            [AvgCurrent],
+            [RunningTime]
+         FROM #FilteredData
+         ORDER BY [Timestamp] ASC;
+         
+         DROP TABLE #FilteredData;
+         RETURN;
+      END
+
+      -- Slow Path: Bucketing
+      DECLARE @Buckets INT = ${targetPoints};
+      DECLARE @StartTime DATETIME2;
+      DECLARE @EndTime DATETIME2;
+      DECLARE @DurationSeconds FLOAT;
+      
+      SELECT @StartTime = MIN([Timestamp]), @EndTime = MAX([Timestamp]) FROM #FilteredData;
+      SET @DurationSeconds = DATEDIFF(SECOND, @StartTime, @EndTime);
+      
+      IF @DurationSeconds <= 0 SET @DurationSeconds = 1;
+
+      ;WITH BucketedData AS (
+          SELECT 
+            *,
+            -- Assign each point to a time bucket
+            CAST( DATEDIFF(SECOND, @StartTime, [Timestamp]) / (@DurationSeconds / @Buckets) AS INT) as BucketId
+          FROM #FilteredData
+      ),
+      SelectedPoints AS (
+          -- A. State Changes
+          SELECT * FROM BucketedData WHERE CAST([IsMotorOn] AS INT) <> PrevState
+          
+          UNION
+          
+          -- B. Max Current per bucket
+          SELECT T.* 
+          FROM BucketedData T
+          INNER JOIN (
+              SELECT BucketId, MAX(MotorCurrent) as MaxVal
+              FROM BucketedData
+              GROUP BY BucketId
+          ) M ON T.BucketId = M.BucketId AND T.MotorCurrent = M.MaxVal
+          
+          UNION
+          
+          -- C. Min Current per bucket
+          SELECT T.* 
+          FROM BucketedData T
+          INNER JOIN (
+              SELECT BucketId, MIN(MotorCurrent) as MinVal
+              FROM BucketedData
+              GROUP BY BucketId
+          ) M ON T.BucketId = M.BucketId AND T.MotorCurrent = M.MinVal
+      )
+      SELECT DISTINCT 
         [Id],
-        -- Return timestamp as raw string to avoid timezone conversion by mssql driver
         FORMAT([Timestamp], 'yyyy-MM-dd HH:mm:ss.fff') AS [Timestamp],
         [MotorName],
         [Zone],
@@ -218,14 +344,14 @@ app.get('/api/motor-logs', async (req, res) => {
         [IsMotorOn],
         [AvgCurrent],
         [RunningTime]
-      FROM [dbo].[MotorLogs]
-      WHERE [MotorName] = @motor
-        AND [Zone] = @zone
-        AND [Line] = @line
-        ${weekClause}
-        ${dayClause}
-      ORDER BY [Timestamp] ASC;
-    `);
+      FROM SelectedPoints
+      ORDER BY [Timestamp] ASC
+      OPTION (RECOMPILE);
+      
+      DROP TABLE #FilteredData;
+    `;
+
+    const result = await request.query(query);
 
     res.json(result.recordset);
   } catch (err) {

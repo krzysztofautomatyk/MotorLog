@@ -1,30 +1,32 @@
 -- Indexes to accelerate MotorLog queries for Zones/Lines/Motors and chart data
--- Run in the target database (MotorLogDB) with appropriate permissions.
+-- Run in the target database (MotorLogDB).
 
--- 1) Core composite index for main filters
-IF NOT EXISTS (
-    SELECT 1 FROM sys.indexes 
-    WHERE name = 'IX_MotorLogs_ZoneLineMotor_TS' AND object_id = OBJECT_ID('dbo.MotorLogs')
-)
+-- 1) Core composite index for main filters (Optimized for Week Selection)
+-- Putting ProductionWeek in the KEY allows seeking directly to the specific week's data
+-- instead of scanning all timestamps for the motor.
+IF EXISTS (SELECT 1 FROM sys.indexes WHERE name = 'IX_MotorLogs_ZoneLineMotor_TS' AND object_id = OBJECT_ID('dbo.MotorLogs'))
 BEGIN
-    CREATE INDEX IX_MotorLogs_ZoneLineMotor_TS
-    ON dbo.MotorLogs (Zone, Line, MotorName, [Timestamp]);
+    DROP INDEX IX_MotorLogs_ZoneLineMotor_TS ON dbo.MotorLogs;
 END;
 GO
 
--- 2) ProductionWeek lookup (filters for week selection)
-IF NOT EXISTS (
-    SELECT 1 FROM sys.indexes 
-    WHERE name = 'IX_MotorLogs_ProductionWeek' AND object_id = OBJECT_ID('dbo.MotorLogs')
-)
+CREATE INDEX IX_MotorLogs_ZoneLineMotor_TS
+ON dbo.MotorLogs (Zone, Line, MotorName, ProductionWeek, [Timestamp])
+INCLUDE (MaxCurrentLimit, MotorCurrent, IsMotorOn, AvgCurrent, RunningTime);
+GO
+
+-- 2) ProductionWeek lookup
+IF EXISTS (SELECT 1 FROM sys.indexes WHERE name = 'IX_MotorLogs_ProductionWeek' AND object_id = OBJECT_ID('dbo.MotorLogs'))
 BEGIN
-    CREATE INDEX IX_MotorLogs_ProductionWeek
-    ON dbo.MotorLogs (ProductionWeek);
+    DROP INDEX IX_MotorLogs_ProductionWeek ON dbo.MotorLogs;
 END;
 GO
 
--- 3) Optional: day-of-week filtering.
--- Adds a persisted computed column to avoid recalculating DATEPART for every row.
+CREATE INDEX IX_MotorLogs_ProductionWeek
+ON dbo.MotorLogs (ProductionWeek);
+GO
+
+-- 3) DayOfWeek column and index
 IF COL_LENGTH('dbo.MotorLogs', 'DayOfWeek') IS NULL
 BEGIN
     ALTER TABLE dbo.MotorLogs
@@ -32,16 +34,17 @@ BEGIN
 END;
 GO
 
-IF NOT EXISTS (
-    SELECT 1 FROM sys.indexes 
-    WHERE name = 'IX_MotorLogs_DayOfWeek' AND object_id = OBJECT_ID('dbo.MotorLogs')
-)
+IF EXISTS (SELECT 1 FROM sys.indexes WHERE name = 'IX_MotorLogs_DayOfWeek' AND object_id = OBJECT_ID('dbo.MotorLogs'))
 BEGIN
-    CREATE INDEX IX_MotorLogs_DayOfWeek
-    ON dbo.MotorLogs (Zone, Line, MotorName, DayOfWeek, [Timestamp]);
+    DROP INDEX IX_MotorLogs_DayOfWeek ON dbo.MotorLogs;
 END;
 GO
 
--- 4) Refresh statistics for stable plans after creating indexes
+CREATE INDEX IX_MotorLogs_DayOfWeek
+ON dbo.MotorLogs (Zone, Line, MotorName, DayOfWeek, [Timestamp])
+INCLUDE (ProductionWeek, MaxCurrentLimit, MotorCurrent, IsMotorOn, AvgCurrent, RunningTime);
+GO
+
+-- 4) Refresh statistics
 UPDATE STATISTICS dbo.MotorLogs WITH FULLSCAN;
 GO
