@@ -121,24 +121,25 @@ const App = () => {
   }, []);
 
   // Auto-refresh state with checkbox toggle
-  const [autoRefresh, setAutoRefresh] = useState(true);
+  const [autoRefresh, setAutoRefresh] = useState(false);
   const [refreshCounter, setRefreshCounter] = useState(0);
+  const [loadNonce, setLoadNonce] = useState(0);
 
   useEffect(() => {
-    if (!autoRefresh) return;
+    if (!autoRefresh || loadNonce === 0) return;
 
     const interval = setInterval(() => {
       setRefreshCounter(c => c + 1);
     }, 10000); // 10 seconds
 
     return () => clearInterval(interval);
-  }, [autoRefresh]);
+  }, [autoRefresh, loadNonce]);
 
   // Update Filters and Fetch Data (including auto-refresh trigger)
   useEffect(() => {
     let isMounted = true;
 
-    if (selectedZone && selectedLine && selectedMotor) {
+    if (selectedZone && selectedLine && selectedMotor && filters.selectedDays.length > 0 && loadNonce > 0) {
       // Show loading only for initial load, not for auto-refresh updates
       const isAutoRefreshUpdate = autoRefresh && refreshCounter > 0;
       if (!isAutoRefreshUpdate) {
@@ -191,7 +192,7 @@ const App = () => {
     return () => {
       isMounted = false;
     };
-  }, [selectedZone, selectedLine, selectedMotor, filters, refreshCounter, autoRefresh]);
+  }, [selectedZone, selectedLine, selectedMotor, filters, refreshCounter, autoRefresh, loadNonce]);
 
   // Get last timestamp from data for age indicator
   const lastDataTimestamp = useMemo(() => {
@@ -244,6 +245,7 @@ const App = () => {
     setSelectedMotor(null);
     setChartData([]);
     setError(null);
+    setLoadNonce(0);
   }, []);
 
   const resetToLines = useCallback(() => {
@@ -252,6 +254,7 @@ const App = () => {
       setSelectedLine(null);
       setSelectedMotor(null);
       setChartData([]);
+      setLoadNonce(0);
     }
   }, [selectedZone]);
 
@@ -280,6 +283,18 @@ const App = () => {
       return { ...prev, selectedDays: newDays };
     });
   }, []);
+
+  const handleLoadData = useCallback(() => {
+    if (!selectedZone || !selectedLine || !selectedMotor) return;
+    if (filters.selectedDays.length === 0) {
+      setError('Wybierz co najmniej jeden dzień, aby załadować dane.');
+      return;
+    }
+    setError(null);
+    setRefreshCounter(0);
+    setLoading(prev => ({ ...prev, chartData: true }));
+    setLoadNonce(n => n + 1);
+  }, [filters.selectedDays.length, selectedLine, selectedMotor, selectedZone]);
 
   // Breadcrumbs config
   const breadcrumbs = useMemo(() => {
@@ -494,10 +509,24 @@ const App = () => {
                       </button>
                     ))}
                     {filters.selectedDays.length === 0 && (
-                      <span className="ml-1 text-[10px] text-[var(--text-tertiary)] font-medium uppercase self-center">(All)</span>
+                      <span className="ml-1 text-[10px] text-[var(--text-tertiary)] font-medium uppercase self-center">(wymagany wybór)</span>
                     )}
                   </div>
                 </div>
+
+                {/* Load button */}
+                <button
+                  onClick={handleLoadData}
+                  className={`flex items-center gap-2 px-3 py-2 rounded border font-bold text-xs transition-colors ${filters.selectedDays.length === 0
+                    ? 'bg-[var(--bg-tertiary)] text-[var(--text-tertiary)] border-[var(--border-primary)] cursor-not-allowed'
+                    : 'bg-blue-600 text-white border-blue-600 hover:bg-blue-700 shadow-sm'
+                    }`}
+                  disabled={filters.selectedDays.length === 0 || loading.chartData}
+                  title="Załaduj dane dla wybranych dni"
+                >
+                  <RefreshCw className="h-3.5 w-3.5" />
+                  {loading.chartData ? 'Ładowanie...' : 'Ładuj dane'}
+                </button>
 
                 {/* Auto-refresh checkbox */}
                 <label className="flex items-center gap-2 cursor-pointer bg-[var(--bg-tertiary)] px-2 py-1 rounded border border-[var(--border-primary)] hover:bg-[var(--bg-card)] transition-colors">
@@ -506,6 +535,7 @@ const App = () => {
                     checked={autoRefresh}
                     onChange={(e) => setAutoRefresh(e.target.checked)}
                     className="w-4 h-4 text-blue-600 rounded focus:ring-blue-500 accent-blue-600"
+                    disabled={loadNonce === 0}
                   />
                   <span className="text-xs font-bold text-[var(--text-secondary)] uppercase tracking-tighter">Auto 10s</span>
                 </label>
