@@ -150,14 +150,14 @@ export const MotorCharts = React.forwardRef<MotorChartsHandle, MotorChartsProps>
 
   // Anchor auto mode to latest data timestamp so historical datasets still display
   useEffect(() => {
-    if (autoRefresh) {
-      if (chartData.length > 0) {
-        setCurrentTime(chartData[chartData.length - 1].timestampMs);
-      } else {
-        setCurrentTime(getNowAsNaiveUTC());
-      }
+    if (!autoRefresh) return;
+    if (data.length > 0) {
+      const last = data[data.length - 1];
+      setCurrentTime(last.timestampObj ?? parseNaiveTimestamp(last.timestamp));
+    } else {
+      setCurrentTime(getNowAsNaiveUTC());
     }
-  }, [autoRefresh, chartData]);
+  }, [autoRefresh, data]);
 
   const getLast10MinRange = useMemo(() => {
     const now = currentTime;
