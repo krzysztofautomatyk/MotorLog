@@ -394,7 +394,10 @@ export const MotorCharts = React.forwardRef<MotorChartsHandle, MotorChartsProps>
         max: _xAxisTimeRange.max,
         axisLine: { lineStyle: { color: axisColor } },
         axisLabel: {
-          formatter: '{HH}:{mm}:{ss}',
+          formatter: (value: number) => {
+            const d = new Date(value);
+            return `${String(d.getUTCHours()).padStart(2, '0')}:${String(d.getUTCMinutes()).padStart(2, '0')}:${String(d.getUTCSeconds()).padStart(2, '0')}`;
+          },
           color: isDark ? '#94a3b8' : '#64748b'
         },
         splitLine: { show: false }
@@ -470,7 +473,10 @@ export const MotorCharts = React.forwardRef<MotorChartsHandle, MotorChartsProps>
         max: _xAxisTimeRange.max,
         axisLine: { lineStyle: { color: axisColor } },
         axisLabel: {
-          formatter: '{HH}:{mm}:{ss}',
+          formatter: (value: number) => {
+            const d = new Date(value);
+            return `${String(d.getUTCHours()).padStart(2, '0')}:${String(d.getUTCMinutes()).padStart(2, '0')}:${String(d.getUTCSeconds()).padStart(2, '0')}`;
+          },
           color: isDark ? '#94a3b8' : '#64748b'
         },
         splitLine: { show: false }
@@ -540,7 +546,10 @@ export const MotorCharts = React.forwardRef<MotorChartsHandle, MotorChartsProps>
         max: _xAxisTimeRange.max,
         axisLine: { lineStyle: { color: axisColor } },
         axisLabel: {
-          formatter: '{HH}:{mm}:{ss}',
+          formatter: (value: number) => {
+            const d = new Date(value);
+            return `${String(d.getUTCHours()).padStart(2, '0')}:${String(d.getUTCMinutes()).padStart(2, '0')}:${String(d.getUTCSeconds()).padStart(2, '0')}`;
+          },
           color: isDark ? '#94a3b8' : '#64748b'
         },
         splitLine: { show: false }
