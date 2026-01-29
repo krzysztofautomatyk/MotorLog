@@ -1,5 +1,9 @@
 -- Indexed View for blazing fast Metadata Queries (Zone/Line/Motor hierarchy)
 -- Run in MotorLogDB
+
+USE MotorLogDB;
+GO
+
 IF OBJECT_ID ('dbo.V_MotorHierarchy', 'V') IS NOT NULL BEGIN
 -- Dropping view automatically drops its indexes
 DROP VIEW dbo.V_MotorHierarchy;

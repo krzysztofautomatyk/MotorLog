@@ -1,6 +1,9 @@
 -- Indexes to accelerate MotorLog queries for Zones/Lines/Motors and chart data
 -- Run in the target database (MotorLogDB).
 
+USE MotorLogDB;
+GO
+
 -- 1) Core composite index for main filters (Optimized for Week Selection)
 -- Putting ProductionWeek in the KEY allows seeking directly to the specific week's data
 -- instead of scanning all timestamps for the motor.
