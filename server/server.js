@@ -221,10 +221,18 @@ app.get('/api/motor-logs', async (req, res) => {
     // Smart Sampling Query (LTTB-lite):
     // REWRITE: Using Temp Table because CTEs cannot be reused across multiple statements (Count, then Limits, then Selection).
 
+    // Smart Sampling Query (Strict Min/Max/First):
+    // 1. Strict limit on points per bucket (Min, Max, First) to prevent data explosion on steady states.
+    // 2. High fidelity: Retains peaks, valleys, and state changes.
+
+    // We target 3 points per bucket (First, Min, Max) + State Changes.
+    // So effective buckets = limit / 3.
+
     const query = `
       SET DATEFIRST 1;
       
-      -- 1. Create Temp Table to hold filtered data (avoid re-running complex filter matches)
+      IF OBJECT_ID('tempdb..#FilteredData') IS NOT NULL DROP TABLE #FilteredData;
+
       CREATE TABLE #FilteredData (
         [Id] BIGINT PRIMARY KEY,
         [Timestamp] DATETIME2,
@@ -237,10 +245,9 @@ app.get('/api/motor-logs', async (req, res) => {
         [IsMotorOn] BIT,
         [AvgCurrent] FLOAT,
         [RunningTime] FLOAT,
-        [PrevState] INT -- Stores previous IsMotorOn for state change detection
+        [PrevState] INT
       );
 
-      -- 2. Populate Temp Table
       INSERT INTO #FilteredData
       SELECT 
           [Id],
@@ -254,7 +261,7 @@ app.get('/api/motor-logs', async (req, res) => {
           [IsMotorOn],
           [AvgCurrent],
           [RunningTime],
-          LAG([IsMotorOn], 1, -1) OVER (ORDER BY [Timestamp])
+          LAG(CAST([IsMotorOn] AS INT), 1, -1) OVER (ORDER BY [Timestamp])
       FROM [dbo].[MotorLogs]
       WHERE [MotorName] = @motor
         AND [Zone] = @zone
@@ -262,11 +269,9 @@ app.get('/api/motor-logs', async (req, res) => {
         ${weekClause}
         ${dayClause};
 
-      -- 3. Check Count
       DECLARE @TotalCount INT;
       SELECT @TotalCount = COUNT(*) FROM #FilteredData;
       
-      -- Fast Path
       IF @TotalCount <= ${targetPoints}
       BEGIN
          SELECT 
@@ -288,64 +293,67 @@ app.get('/api/motor-logs', async (req, res) => {
          RETURN;
       END
 
-      -- Slow Path: Bucketing
-      DECLARE @Buckets INT = ${targetPoints};
+      -- Strict Downsampling
+      -- Divide by 3 because we might pick up to 3 points per bucket (First, Min, Max)
+      DECLARE @Buckets INT = ${Math.floor(targetPoints / 3)};
+      IF @Buckets < 1 SET @Buckets = 1;
+      
       DECLARE @StartTime DATETIME2;
       DECLARE @EndTime DATETIME2;
       DECLARE @DurationSeconds FLOAT;
       
       SELECT @StartTime = MIN([Timestamp]), @EndTime = MAX([Timestamp]) FROM #FilteredData;
       SET @DurationSeconds = DATEDIFF(SECOND, @StartTime, @EndTime);
-      
       IF @DurationSeconds <= 0 SET @DurationSeconds = 1;
 
-      ;WITH BucketedData AS (
+      ;WITH Bucketed AS (
           SELECT 
-            *,
-            -- Assign each point to a time bucket
+            [Id], [Timestamp], [MotorName], [MotorCurrent], [IsMotorOn], [PrevState],
             CAST( DATEDIFF(SECOND, @StartTime, [Timestamp]) / (@DurationSeconds / @Buckets) AS INT) as BucketId
           FROM #FilteredData
       ),
-      SelectedPoints AS (
-          -- A. State Changes
-          SELECT * FROM BucketedData WHERE CAST([IsMotorOn] AS INT) <> PrevState
+      Ranked AS (
+          SELECT 
+             *,
+             ROW_NUMBER() OVER (PARTITION BY BucketId ORDER BY MotorCurrent ASC) as RankMin,
+             ROW_NUMBER() OVER (PARTITION BY BucketId ORDER BY MotorCurrent DESC) as RankMax,
+             ROW_NUMBER() OVER (PARTITION BY BucketId ORDER BY [Timestamp] ASC) as RankFirst
+          FROM Bucketed
+      ),
+      SelectedIds AS (
+          -- 1. State Changes
+          SELECT [Id] FROM Bucketed WHERE CAST([IsMotorOn] AS INT) <> PrevState
           
           UNION
           
-          -- B. Max Current per bucket
-          SELECT T.* 
-          FROM BucketedData T
-          INNER JOIN (
-              SELECT BucketId, MAX(MotorCurrent) as MaxVal
-              FROM BucketedData
-              GROUP BY BucketId
-          ) M ON T.BucketId = M.BucketId AND T.MotorCurrent = M.MaxVal
+          -- 2. First point of bucket
+          SELECT [Id] FROM Ranked WHERE RankFirst = 1
           
           UNION
           
-          -- C. Min Current per bucket
-          SELECT T.* 
-          FROM BucketedData T
-          INNER JOIN (
-              SELECT BucketId, MIN(MotorCurrent) as MinVal
-              FROM BucketedData
-              GROUP BY BucketId
-          ) M ON T.BucketId = M.BucketId AND T.MotorCurrent = M.MinVal
+          -- 3. Max Current
+          SELECT [Id] FROM Ranked WHERE RankMax = 1
+          
+          UNION
+
+          -- 4. Min Current
+          SELECT [Id] FROM Ranked WHERE RankMin = 1
       )
-      SELECT DISTINCT 
-        [Id],
-        FORMAT([Timestamp], 'yyyy-MM-dd HH:mm:ss.fff') AS [Timestamp],
-        [MotorName],
-        [Zone],
-        [Line],
-        [ProductionWeek],
-        [MaxCurrentLimit],
-        [MotorCurrent],
-        [IsMotorOn],
-        [AvgCurrent],
-        [RunningTime]
-      FROM SelectedPoints
-      ORDER BY [Timestamp] ASC
+      SELECT 
+        T.[Id],
+        FORMAT(T.[Timestamp], 'yyyy-MM-dd HH:mm:ss.fff') AS [Timestamp],
+        T.[MotorName],
+        T.[Zone],
+        T.[Line],
+        T.[ProductionWeek],
+        T.[MaxCurrentLimit],
+        T.[MotorCurrent],
+        T.[IsMotorOn],
+        T.[AvgCurrent],
+        T.[RunningTime]
+      FROM #FilteredData T
+      WHERE T.[Id] IN (SELECT [Id] FROM SelectedIds)
+      ORDER BY T.[Timestamp] ASC
       OPTION (RECOMPILE);
       
       DROP TABLE #FilteredData;
