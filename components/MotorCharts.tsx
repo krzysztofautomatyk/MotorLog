@@ -132,8 +132,9 @@ export const MotorCharts = React.forwardRef<MotorChartsHandle, MotorChartsProps>
     return () => clearTimeout(timer);
   }, [data]);
 
-  // Calculate 10-minute window based on CURRENT TIME (not last data timestamp)
-  // This ensures we always see the "live" window, even if data is old
+  // Calculate 10-minute window based on current reference time.
+  // In auto mode, we anchor to the latest data timestamp (so stale data still shows);
+  // otherwise we use wall-clock now.
   const [currentTime, setCurrentTime] = useState(getNowAsNaiveUTC());
 
   // Update current time every 10 seconds (synced with auto-refresh)
@@ -146,6 +147,17 @@ export const MotorCharts = React.forwardRef<MotorChartsHandle, MotorChartsProps>
 
     return () => clearInterval(interval);
   }, [autoRefresh]);
+
+  // Anchor auto mode to latest data timestamp so historical datasets still display
+  useEffect(() => {
+    if (autoRefresh) {
+      if (chartData.length > 0) {
+        setCurrentTime(chartData[chartData.length - 1].timestampMs);
+      } else {
+        setCurrentTime(getNowAsNaiveUTC());
+      }
+    }
+  }, [autoRefresh, chartData]);
 
   const getLast10MinRange = useMemo(() => {
     const now = currentTime;

@@ -159,7 +159,7 @@ const App = () => {
               selectedZone.name,
               selectedLine.name,
               selectedMotor,
-              15
+              10
             );
           } else {
             // Use full endpoint when auto-refresh is OFF (filtered by weeks/days)
